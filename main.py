@@ -16,7 +16,6 @@ from webdriver_manager.chrome import ChromeDriverManager
 # 設定エリア
 # ==========================================
 DEFAULT_LOGIN_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/login/tawLogin.html"
-RESERVE_HISTORY_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/reserveHistory.html"
 ROUTINE_STATION_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/routineStation.html"
 
 TMA_ID = "0030-927583"
@@ -87,56 +86,7 @@ def handle_popups(driver):
         pass 
 
 # ==========================================
-# 新機能：キャンセル処理
-# ==========================================
-def cancel_reservation(driver, plate):
-    print(f"\n--- [処理開始] 予約キャンセル: 車両 {plate} ---")
-    driver.get(RESERVE_HISTORY_URL)
-    
-    wait = WebDriverWait(driver, 10)
-    
-    while True:
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-        rows = driver.find_elements(By.XPATH, "//table//tr")
-        found = False
-        
-        for row in rows:
-            if plate in row.text:
-                print(f"   対象車両 {plate} を発見しました。取消を実行します。")
-                # 白い「× 取消」ボタンをクリック
-                cancel_button = row.find_element(By.XPATH, ".//*[contains(text(), '取消') or contains(@class, 'submit-btn')]")
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cancel_button)
-                time.sleep(0.5)
-                cancel_button.click()
-                found = True
-                break
-        
-        if found:
-            # 確認ダイアログの「はい」または「OK」を押す
-            print("   キャンセル確認ダイアログの処理を待機します...")
-            try:
-                ok_button = wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'OK') or contains(text(), 'はい')]")))
-                ok_button.click()
-                print("   [OK] キャンセル処理が完了しました。")
-                time.sleep(2)
-            except Exception as e:
-                take_screenshot(driver, "ERROR_CancelDialog")
-                print("   [警告] キャンセル確認ダイアログの処理に失敗しました。")
-            break
-        else:
-            # ページ送り
-            next_buttons = driver.find_elements(By.XPATH, "//a[contains(text(), '次へ') or contains(text(), '＞')]")
-            if next_buttons and next_buttons[0].is_displayed():
-                print("   現在のページに対象車両がないため、次のページへ遷移します。")
-                next_buttons[0].click()
-                time.sleep(2)
-            else:
-                print(f"   [終了] キャンセル対象の車両 {plate} が見つかりませんでした。")
-                take_screenshot(driver, "INFO_CancelNotFound")
-                break
-
-# ==========================================
-# 新機能：予約処理
+# 予約処理 (修正版：3ステップ遷移対応)
 # ==========================================
 def reserve_vehicle(driver, station, plate, reservation_time):
     print(f"\n--- [処理開始] 新規予約: ST {station} / 車両 {plate} / 日時 {reservation_time} ---")
@@ -144,61 +94,103 @@ def reserve_vehicle(driver, station, plate, reservation_time):
     date_part, time_part = reservation_time.split(" ")
     hour_part, minute_part = time_part.split(":")
     
-    driver.get(ROUTINE_STATION_URL)
-    wait = WebDriverWait(driver, 10)
+    wait = WebDriverWait(driver, 15)
     
+    # ----------------------------------------------------
+    # STEP 1: 巡回ST管理画面で対象ステーションをクリック
+    # ----------------------------------------------------
+    driver.get(ROUTINE_STATION_URL)
+    print("   [STEP 1] 巡回ST管理画面でステーションを検索中...")
+    
+    station_found = False
     while True:
-        wait.until(EC.presence_of_element_located((By.TAG_NAME, "table")))
-        rows = driver.find_elements(By.XPATH, "//table//tr")
-        found = False
+        # aタグの中に指定のステーション名を持つspanがあるか探す
+        station_links = driver.find_elements(By.XPATH, f"//a[.//span[contains(@class, 'assignStationNm') and contains(text(), '{station}')]]")
         
-        for row in rows:
-            if station in row.text and plate in row.text:
-                print(f"   対象ST {station} / 車両 {plate} を発見しました。予約画面へ進みます。")
-                # 黄色い「予約」ボタンをクリック
-                reserve_button = row.find_element(By.XPATH, ".//*[contains(text(), '予約')]")
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", reserve_button)
-                time.sleep(0.5)
-                reserve_button.click()
-                found = True
-                break
-        
-        if found:
+        if station_links:
+            print(f"   対象ステーション '{station}' を発見しました。車両一覧へ遷移します。")
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", station_links[0])
+            time.sleep(0.5)
+            station_links[0].click()
+            station_found = True
             break
         else:
-            next_buttons = driver.find_elements(By.XPATH, "//a[contains(text(), '次へ') or contains(text(), '＞')]")
+            # 次のページへ (id="assignNextPageBtn" をクリック)
+            next_buttons = driver.find_elements(By.XPATH, "//a[@id='assignNextPageBtn']")
             if next_buttons and next_buttons[0].is_displayed():
-                print("   現在のページに対象が見つからないため、次のページへ遷移します。")
-                next_buttons[0].click()
-                time.sleep(2)
+                print("   現在のページに対象STがないため、次のページへ遷移します。")
+                driver.execute_script("arguments[0].click();", next_buttons[0])
+                time.sleep(2) # ページ遷移待ち
             else:
-                print(f"   [エラー] 予約対象のST {station} / 車両 {plate} が見つかりませんでした。")
-                take_screenshot(driver, "ERROR_ReserveTargetNotFound")
-                return
+                take_screenshot(driver, "ERROR_StationNotFound")
+                raise Exception(f"エラー: 対象ステーション '{station}' が見つかりませんでした。")
+                
+    if not station_found:
+        return
 
-    # --- 予約入力画面 ---
-    print("   予約入力画面の読み込みを待機しています...")
+    # ----------------------------------------------------
+    # STEP 2: 車両一覧画面で黄色い「予約」ボタンをクリック
+    # ----------------------------------------------------
+    print(f"   [STEP 2] 車両一覧画面で対象車両 '{plate}' の予約ボタンを検索中...")
+    time.sleep(2) # 画面遷移の確実な待機
+    
+    # 対象の車両ナンバーが画面内に表示されるまで待機
+    wait.until(EC.presence_of_element_located((By.XPATH, f"//*[contains(text(), '{plate}')]")))
+    
+    # 汎用的に対象の車両を含むブロック（行やリスト）を探し、その中の予約ボタンをクリックする
+    blocks = driver.find_elements(By.XPATH, f"//*[contains(text(), '{plate}')]/ancestor::*[position()<=3]")
+    reserve_button = None
+    
+    for block in blocks:
+        try:
+            btns = block.find_elements(By.XPATH, ".//button[contains(text(), '予約') or contains(@class, 'btn')] | .//a[contains(text(), '予約') or contains(@class, 'btn')]")
+            for btn in btns:
+                if "予約" in btn.text:
+                    reserve_button = btn
+                    break
+        except:
+            continue
+        if reserve_button:
+            break
+            
+    if reserve_button:
+        print(f"   対象車両 '{plate}' の予約ボタンを発見しました。予約入力画面へ遷移します。")
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", reserve_button)
+        time.sleep(0.5)
+        reserve_button.click()
+    else:
+        take_screenshot(driver, "ERROR_VehicleNotFound")
+        raise Exception(f"エラー: 車両 '{plate}' またはその予約ボタンが見つかりませんでした。")
+
+    # ----------------------------------------------------
+    # STEP 3: 予約入力画面 (プルダウン操作)
+    # ----------------------------------------------------
+    print("   [STEP 3] 予約入力画面の読み込みを待機しています...")
     try:
         # 日付選択のプルダウンが表示されるまで待機
         use_date_element = wait.until(EC.presence_of_element_located((By.XPATH, "//select[contains(@name, 'Date') or contains(@id, 'Date') or contains(@name, 'date')]")))
         
+        # 1. 日付
         select_date = Select(use_date_element)
         select_date.select_by_value(date_part)
         
+        # 2. 時間(時)
         select_hour = Select(driver.find_element(By.XPATH, "//select[contains(@name, 'Hour') or contains(@id, 'Hour') or contains(@name, 'hour')]"))
         select_hour.select_by_value(hour_part)
         
+        # 3. 時間(分)
         select_minute = Select(driver.find_element(By.XPATH, "//select[contains(@name, 'Minute') or contains(@id, 'Minute') or contains(@name, 'minute')]"))
         select_minute.select_by_value(minute_part)
         
-        # 【超重要】予約時間を15分に変更
+        # 4. 【超重要】予約時間を15分に変更
         print("   【重要】予約時間をデフォルトの30分から15分に変更します。")
-        select_duration = Select(driver.find_element(By.XPATH, "//select[contains(@name, 'Time') or contains(@id, 'Time') or contains(@name, 'duration')]"))
+        select_duration = Select(driver.find_element(By.XPATH, "//select[contains(@name, 'Time') or contains(@id, 'Time') or contains(@name, 'duration') or contains(@name, 'useTime')]"))
         try:
             select_duration.select_by_value("15")
         except:
             select_duration.select_by_visible_text("15分")
         
+        # 5. 確定ボタンのクリック
         print("   予約内容を確定します。")
         submit_button = driver.find_element(By.XPATH, "//button[contains(text(), '確認') or contains(text(), '確定') or contains(text(), '登録')]")
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", submit_button)
@@ -206,6 +198,7 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         submit_button.click()
         
         time.sleep(3)
+        handle_popups(driver) # モーダルが出る場合に対応
         print("   [OK] 予約処理が完了しました。")
         take_screenshot(driver, "SUCCESS_ReservationCompleted")
 
@@ -225,6 +218,7 @@ def main():
         sys.exit(1)
     
     try:
+        # JSON形式の引数を受け取る
         payload_str = sys.argv[1]
         data = json.loads(payload_str)
         target_station = data.get('station', '大和テストステーション')
@@ -247,17 +241,14 @@ def main():
         input_strict(driver, "#password", TMA_PW)
         click_strict(driver, ".btn-primary")
         
-        # ログイン完了の待機 (トップ画面の要素を待つ)
+        # ログイン完了の待機
         try:
             WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "main")))
             print("   ログインに成功しました。")
         except:
             pass
             
-        # [2] キャンセル処理の実行
-        cancel_reservation(driver, target_plate)
-        
-        # [3] 予約処理の実行
+        # [2] 予約処理の実行 (ステーション選択 → 車両選択 → 予約入力)
         reserve_vehicle(driver, target_station, target_plate, reservation_time)
 
         print("\n=== SUCCESS: 全工程完了 ===")
