@@ -19,7 +19,7 @@ DEFAULT_LOGIN_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/login/tawLog
 ROUTINE_STATION_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/routineStation.html"
 
 TMA_ID = "0030-927583"
-TMA_PW = "Ccj-222223"
+TMA_PW = "Ccj-322222"
 EVIDENCE_DIR = "evidence"
 
 # ==========================================
