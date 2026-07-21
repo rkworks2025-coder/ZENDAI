@@ -17,6 +17,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 # ==========================================
 DEFAULT_LOGIN_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/login/tawLogin.html"
 ROUTINE_STATION_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/routineStation.html"
+RESERVE_HISTORY_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/reserveHistory.html"
+CANCEL_MAX_LOOP = 130
 
 TMA_ID = "0030-927583"
 TMA_PW = "Ccj-322222"
@@ -208,6 +210,43 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         raise e
 
 # ==========================================
+# 全件予約取消処理
+# ==========================================
+def cancel_all_reservations(driver):
+    print("\n--- [処理開始] 全件予約取消 ---")
+    count = 0
+
+    for i in range(CANCEL_MAX_LOOP):
+        driver.get(RESERVE_HISTORY_URL)
+        WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.ID, "reserveList")))
+
+        boxes = driver.find_elements(By.XPATH, "//div[@id='reserveList']//div[contains(@class, 'car-list-box')]")
+
+        if not boxes:
+            print(f"   取消対象なし。処理を終了します。（合計 {count} 件取消）")
+            break
+
+        try:
+            cancel_btn = WebDriverWait(driver, 15).until(
+                EC.element_to_be_clickable((By.XPATH, "(//div[@id='reserveList']//div[contains(@class, 'car-list-box')])[1]//button[contains(@class, 'submit-btn') and contains(text(), '取消')]"))
+            )
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", cancel_btn)
+            time.sleep(0.3)
+            cancel_btn.click()
+            handle_popups(driver)
+            time.sleep(1.5)
+            count += 1
+            print(f"   [OK] {count}件目を取消しました。")
+        except Exception as e:
+            take_screenshot(driver, "ERROR_CancelFailed")
+            raise Exception(f"取消処理中にエラーが発生しました（{count}件処理済み）") from e
+    else:
+        print(f"   [警告] ループ上限（{CANCEL_MAX_LOOP}回）に到達したため処理を終了します。（合計 {count} 件取消）")
+
+    take_screenshot(driver, "SUCCESS_AllCancelled")
+    print(f"   [OK] 全件取消処理が完了しました。（合計 {count} 件）")
+
+# ==========================================
 # メイン処理
 # ==========================================
 def main():
@@ -221,10 +260,8 @@ def main():
         # JSON形式の引数を受け取る
         payload_str = sys.argv[1]
         data = json.loads(payload_str)
-        target_station = data.get('station', '大和テストステーション')
-        target_plate = data.get('plate', '品川500あ1234')
-        reservation_time = data.get('reservation_time', '2026-02-24 10:30')
-        print(f"Target -> ST: {target_station}, Plate: {target_plate}, Time: {reservation_time}")
+        target_action = data.get('action', 'reserve')
+        print(f"Action -> {target_action}")
     except Exception as e:
         print(f"Error parsing payload: {e}")
         sys.exit(1)
@@ -248,8 +285,17 @@ def main():
         except:
             pass
             
-        # [2] 予約処理の実行 (ステーション選択 → 車両選択 → 予約入力)
-        reserve_vehicle(driver, target_station, target_plate, reservation_time)
+        # [2] アクションに応じた処理の実行
+        if target_action == 'reserve':
+            target_station = data.get('station', '大和テストステーション')
+            target_plate = data.get('plate', '品川500あ1234')
+            reservation_time = data.get('reservation_time', '2026-02-24 10:30')
+            print(f"Target -> ST: {target_station}, Plate: {target_plate}, Time: {reservation_time}")
+            reserve_vehicle(driver, target_station, target_plate, reservation_time)
+        elif target_action == 'cancel_all':
+            cancel_all_reservations(driver)
+        else:
+            raise Exception(f"未対応のactionです: {target_action}")
 
         print("\n=== SUCCESS: 全工程完了 ===")
         sys.exit(0)
