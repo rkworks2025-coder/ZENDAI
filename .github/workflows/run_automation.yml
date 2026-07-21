@@ -3,17 +3,25 @@ name: Run TMA Automation
 on:
   workflow_dispatch:
     inputs:
-      station:
-        description: 'ステーション名 (例: 大和テストST)'
+      action:
+        description: '実行するアクション'
         required: true
+        type: choice
+        default: 'reserve'
+        options:
+          - reserve
+          - cancel_all
+      station:
+        description: 'ステーション名 (例: 大和テストST) ※reserve時のみ使用'
+        required: false
         default: 'テストステーション'
       plate:
-        description: '車両ナンバー (例: 品川500あ1234)'
-        required: true
+        description: '車両ナンバー (例: 品川500あ1234) ※reserve時のみ使用'
+        required: false
         default: '品川500あ1234'
       reservation_time:
-        description: '予約日時 (例: 2026-02-24 10:30)'
-        required: true
+        description: '予約日時 (例: 2026-02-24 10:30) ※reserve時のみ使用'
+        required: false
         default: '2026-02-24 10:30'
   repository_dispatch:
     types: [webhook_from_gas]
@@ -44,7 +52,11 @@ jobs:
       - name: Run Automation Script (Manual / 手動テスト用)
         if: github.event_name == 'workflow_dispatch'
         run: |
-          PAYLOAD="{\"station\": \"${{ github.event.inputs.station }}\", \"plate\": \"${{ github.event.inputs.plate }}\", \"reservation_time\": \"${{ github.event.inputs.reservation_time }}\"}"
+          if [ "${{ github.event.inputs.action }}" = "cancel_all" ]; then
+            PAYLOAD='{"action": "cancel_all"}'
+          else
+            PAYLOAD="{\"action\": \"reserve\", \"station\": \"${{ github.event.inputs.station }}\", \"plate\": \"${{ github.event.inputs.plate }}\", \"reservation_time\": \"${{ github.event.inputs.reservation_time }}\"}"
+          fi
           python main.py "$PAYLOAD"
 
       - name: Run Automation Script (Webhook / GASからの連携用)
