@@ -20,7 +20,11 @@ ROUTINE_STATION_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/routineSta
 CANCEL_MAX_LOOP = 130
 
 TMA_ID = "0030-927583"
-TMA_PW = "Ccj-322222"
+# PWは定期的にmode1/mode2で切り替わるため、実行時にpw_modeで指定する（ハードコード禁止）
+PW_TABLE = {
+    "mode1": "Ccj-222223",
+    "mode2": "Ccj-322222",
+}
 EVIDENCE_DIR = "evidence"
 
 # ==========================================
@@ -87,21 +91,26 @@ def handle_popups(driver):
     except:
         pass 
 
-def login_(driver):
+def login_(driver, password):
     """ログイン処理"""
     print("\n--- [1] ログイン ---")
     driver.get(DEFAULT_LOGIN_URL)
     id_parts = TMA_ID.split("-")
     input_strict(driver, "#cardNo1", id_parts[0])
     input_strict(driver, "#cardNo2", id_parts[1])
-    input_strict(driver, "#password", TMA_PW)
+    input_strict(driver, "#password", password)
     click_strict(driver, ".btn-primary")
 
+    # ログイン成功判定: <main>タグの有無だけでは認証エラー画面でも素通りしてしまうため、
+    # ログイン後の共通ヘッダーにしか存在しない「ログアウト」ボタンの存在で判定する
     try:
-        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.TAG_NAME, "main")))
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.XPATH, "//input[@type='submit' and @value='ログアウト']"))
+        )
         print("   ログインに成功しました。")
     except:
-        pass
+        take_screenshot(driver, "ERROR_LoginFailed")
+        raise Exception("ログインに失敗しました（PASS/pw_modeが正しくない可能性があります）")
 
 # ==========================================
 # 予約処理 (修正版：3ステップ遷移対応)
@@ -232,9 +241,13 @@ def cancel_all_reservations(driver):
     print("\n--- [処理開始] 全件予約取消 ---")
     count = 0
 
-    # 最初の1回だけ、実際の「予約履歴」リンク/ボタンをクリックして遷移する
-    # （直接URLアクセスはしない。TMA-Auto-Input / yoyakuLong と同じ流儀）
-    click_strict(driver, "//main//a[contains(@href,'reserve')] | //main//button[contains(text(),'予約履歴')]")
+    # 最初の1回だけ、実際の「予約履歴」リンクをクリックして遷移する（直接URLアクセスはしない）。
+    # このリンクは<main>の外（ヘッダーのハンバーガーメニュー内）にあり、メニュー未展開時は
+    # 画面上非表示のため、通常クリックではなくJS経由でクリックする。
+    reserve_link = WebDriverWait(driver, 15).until(
+        EC.presence_of_element_located((By.XPATH, "//a[contains(@class,'nav-link') and contains(@href,'reserveHistory')]"))
+    )
+    driver.execute_script("arguments[0].click();", reserve_link)
     WebDriverWait(driver, 15).until(EC.presence_of_element_located((By.ID, "reserveList")))
 
     for i in range(CANCEL_MAX_LOOP):
@@ -292,11 +305,17 @@ def main():
         print(f"Error parsing payload: {e}")
         sys.exit(1)
 
+    pw_mode = data.get('pw_mode')
+    if pw_mode not in PW_TABLE:
+        print(f"Error: pw_modeは 'mode1' か 'mode2' のいずれかを指定してください（受信値: {pw_mode}）")
+        sys.exit(1)
+    password = PW_TABLE[pw_mode]
+
     driver = get_chrome_driver()
 
     try:
         # [1] ログイン
-        login_(driver)
+        login_(driver, password)
 
         # [2] アクションに応じた処理の実行
         if target_action == 'reserve':
