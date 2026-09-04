@@ -164,6 +164,12 @@
         <button type="button" data-val="B">B</button>
       </div>
 
+      <h2>PWモード <span class="optional">（現在有効な方を選択）</span></h2>
+      <div class="tantousha-toggle" id="pwModeToggle">
+        <button type="button" data-val="mode1">mode1</button>
+        <button type="button" data-val="mode2">mode2</button>
+      </div>
+
       <h2>設定</h2>
       <div class="field">
         <label for="dataDate">全台予約日</label>
@@ -212,6 +218,7 @@ const GAS_URL = "https://script.google.com/macros/s/AKfycbxTjlaNnILoLQBLdxnvBHZ8
 
 const els = {
   toggle: document.getElementById('tantoushaToggle'),
+  pwModeToggle: document.getElementById('pwModeToggle'),
   dataDate: document.getElementById('dataDate'),
   deadline: document.getElementById('deadline'),
   customStart: document.getElementById('customStart'),
@@ -224,6 +231,7 @@ const els = {
 };
 
 let tantousha = "";
+let pwMode = "";
 
 function setTantousha(v){
   tantousha = v;
@@ -233,6 +241,16 @@ els.toggle.addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
   setTantousha(btn.dataset.val);
+});
+
+function setPwMode(v){
+  pwMode = v;
+  [...els.pwModeToggle.children].forEach(b => b.classList.toggle('active', b.dataset.val === v));
+}
+els.pwModeToggle.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  setPwMode(btn.dataset.val);
 });
 
 function nowStr(){
@@ -328,10 +346,14 @@ els.modalNo.addEventListener('click', () => {
 });
 els.modalYes.addEventListener('click', async () => {
   els.modal.classList.remove('open');
+  if (!pwMode){
+    addLog('err', 'PWモードを選択してください');
+    return;
+  }
   setBtnLoading(els.cancelAllBtn, true, '起動中…');
   try{
-    await callGas('cancelAll');
-    addLog('info', '全台取消を起動しました', 'GitHub Actions側で実行中です。完了まで数分かかります。');
+    await callGas('cancelAll', { pw_mode: pwMode });
+    addLog('info', '全台取消を起動しました', `pw_mode: ${pwMode} / GitHub Actions側で実行中です。完了まで数分かかります。`);
   } catch(err){
     addLog('err', '全台取消の起動に失敗しました', err.message);
   } finally {
