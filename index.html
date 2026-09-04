@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>全台予約コントロール | ZENDAI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#14161b;
+    --panel:#1b1e25;
+    --panel-2:#20242c;
+    --line:#2a2e38;
+    --text:#e9e7e2;
+    --text-dim:#8c909b;
+    --amber:#f2a93b;
+    --amber-dim:#3a2d17;
+    --coral:#e2574c;
+    --coral-dim:#3a1e1c;
+    --green:#5fbf8a;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(circle at 15% 0%, rgba(242,169,59,0.06), transparent 45%),
+      radial-gradient(circle at 100% 100%, rgba(226,87,76,0.05), transparent 40%),
+      var(--bg);
+    color:var(--text);
+    font-family:'Zen Kaku Gothic New', -apple-system, BlinkMacSystemFont, sans-serif;
+    min-height:100vh;
+    display:flex;
+    justify-content:center;
+    padding:32px 16px 80px;
+    line-height:1.6;
+  }
+  .mono{ font-family:'JetBrains Mono', ui-monospace, monospace; }
+
+  .wrap{ width:100%; max-width:460px; }
+
+  header.top{
+    display:flex; align-items:baseline; justify-content:space-between;
+    margin-bottom:22px; padding:0 2px;
+  }
+  header.top h1{
+    font-size:19px; font-weight:700; margin:0; letter-spacing:.01em;
+  }
+  header.top .sub{ font-size:12px; color:var(--text-dim); }
+
+  .card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    padding:20px;
+    margin-bottom:16px;
+  }
+  .card h2{
+    font-size:13px; font-weight:700; margin:0 0 16px;
+    color:var(--text-dim);
+  }
+
+  .tantousha-toggle{
+    display:flex; gap:8px; margin-bottom:18px;
+  }
+  .tantousha-toggle button{
+    flex:1; padding:10px 0; border-radius:10px; border:1px solid var(--line);
+    background:var(--panel-2); color:var(--text-dim);
+    font-family:inherit; font-size:14px; font-weight:700; cursor:pointer;
+    transition:border-color .15s, color .15s, background .15s;
+  }
+  .tantousha-toggle button.active{
+    border-color:var(--amber); color:var(--amber); background:var(--amber-dim);
+  }
+
+  .field{ margin-bottom:14px; }
+  .field:last-child{ margin-bottom:0; }
+  .field label{
+    display:block; font-size:12px; color:var(--text-dim); margin-bottom:6px;
+  }
+  .field .optional{ color:#5b5f68; font-weight:400; }
+  .field input[type="datetime-local"]{
+    width:100%; padding:11px 12px; border-radius:10px;
+    border:1px solid var(--line); background:var(--panel-2);
+    color:var(--text); font-family:'JetBrains Mono', ui-monospace, monospace;
+    font-size:14px; outline:none;
+    color-scheme:dark;
+  }
+  .field input:focus{ border-color:var(--amber); }
+
+  .actions{ display:flex; flex-direction:column; gap:10px; margin-bottom:16px; }
+  .btn{
+    border:none; border-radius:12px; padding:15px 18px;
+    font-family:inherit; font-size:15px; font-weight:700; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    transition:filter .15s, transform .1s;
+  }
+  .btn:active{ transform:scale(0.985); }
+  .btn:disabled{ opacity:.55; cursor:default; transform:none; }
+  .btn-primary{ background:var(--amber); color:#221a08; }
+  .btn-primary:not(:disabled):hover{ filter:brightness(1.07); }
+  .btn-danger{
+    background:transparent; color:var(--coral); border:1px solid rgba(226,87,76,0.4);
+  }
+  .btn-danger:not(:disabled):hover{ background:var(--coral-dim); }
+
+  .spinner{
+    width:14px; height:14px; border-radius:50%;
+    border:2px solid rgba(0,0,0,.25); border-top-color:rgba(0,0,0,.7);
+    animation:spin .7s linear infinite;
+  }
+  .btn-danger .spinner{ border:2px solid rgba(226,87,76,.25); border-top-color:var(--coral); }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
+  .log{
+    font-size:13px;
+  }
+  .log-empty{ color:var(--text-dim); font-size:13px; }
+  .log-entry{
+    border-top:1px solid var(--line); padding:12px 0; display:flex; gap:10px;
+  }
+  .log-entry:first-child{ border-top:none; padding-top:0; }
+  .log-dot{
+    width:8px; height:8px; border-radius:50%; margin-top:6px; flex-shrink:0;
+  }
+  .log-dot.ok{ background:var(--green); }
+  .log-dot.err{ background:var(--coral); }
+  .log-dot.info{ background:var(--amber); }
+  .log-body .log-title{ font-weight:700; margin-bottom:2px; }
+  .log-body .log-detail{ color:var(--text-dim); }
+  .log-body .log-time{ color:#5b5f68; font-size:11px; margin-top:4px; }
+
+  /* モーダル */
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(10,11,14,0.72);
+    display:none; align-items:center; justify-content:center; padding:20px;
+    z-index:10;
+  }
+  .modal-overlay.open{ display:flex; }
+  .modal{
+    background:var(--panel); border:1px solid var(--line); border-radius:16px;
+    padding:24px; max-width:360px; width:100%;
+  }
+  .modal h3{ margin:0 0 10px; font-size:16px; color:var(--coral); }
+  .modal p{ margin:0 0 20px; font-size:13px; color:var(--text-dim); }
+  .modal .modal-actions{ display:flex; gap:10px; }
+  .modal .modal-actions .btn{ flex:1; padding:12px; font-size:14px; }
+  .btn-ghost{ background:var(--panel-2); color:var(--text); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <h1>全台予約コントロール</h1>
+      <span class="sub">ZENDAI</span>
+    </header>
+
+    <div class="card">
+      <h2>担当者</h2>
+      <div class="tantousha-toggle" id="tantoushaToggle">
+        <button type="button" data-val="A">A</button>
+        <button type="button" data-val="B">B</button>
+      </div>
+
+      <h2>設定</h2>
+      <div class="field">
+        <label for="dataDate">全台予約日</label>
+        <input type="datetime-local" id="dataDate">
+      </div>
+      <div class="field">
+        <label for="deadline">納期日</label>
+        <input type="datetime-local" id="deadline" step="1800">
+      </div>
+      <div class="field">
+        <label for="customStart">予約探索開始日時 <span class="optional">（空欄可）</span></label>
+        <input type="datetime-local" id="customStart">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" id="runBtn">
+        <span class="btn-label">全台予約を実行</span>
+      </button>
+      <button class="btn btn-danger" id="cancelAllBtn">
+        <span class="btn-label">予約オールクリア（全台取消）</span>
+      </button>
+    </div>
+
+    <div class="card">
+      <h2>ログ</h2>
+      <div class="log" id="log">
+        <div class="log-empty">まだ実行していません</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="cancelModal">
+    <div class="modal">
+      <h3>本当に全台取消しますか？</h3>
+      <p>TMAに入っている予約をすべて取り消します。GitHub Actions側でボタン操作の自動取消が実行され、元に戻せません。</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="cancelModalNo">やめる</button>
+        <button class="btn btn-danger" id="cancelModalYes" style="border-color:var(--coral);">取消を実行</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const GAS_URL = "https://script.google.com/macros/s/AKfycbxTjlaNnILoLQBLdxnvBHZ85hVx2KmWxv1Je8TsCLicLI_uJLsgvg7sLcRp-JZMHwc3/exec";
+
+const els = {
+  toggle: document.getElementById('tantoushaToggle'),
+  dataDate: document.getElementById('dataDate'),
+  deadline: document.getElementById('deadline'),
+  customStart: document.getElementById('customStart'),
+  runBtn: document.getElementById('runBtn'),
+  cancelAllBtn: document.getElementById('cancelAllBtn'),
+  log: document.getElementById('log'),
+  modal: document.getElementById('cancelModal'),
+  modalNo: document.getElementById('cancelModalNo'),
+  modalYes: document.getElementById('cancelModalYes'),
+};
+
+let tantousha = "";
+
+function setTantousha(v){
+  tantousha = v;
+  [...els.toggle.children].forEach(b => b.classList.toggle('active', b.dataset.val === v));
+}
+els.toggle.addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  setTantousha(btn.dataset.val);
+});
+
+function nowStr(){
+  const d = new Date();
+  return d.toLocaleString('ja-JP', { hour12:false });
+}
+
+function addLog(type, title, detail){
+  const empty = els.log.querySelector('.log-empty');
+  if (empty) empty.remove();
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `
+    <div class="log-dot ${type}"></div>
+    <div class="log-body">
+      <div class="log-title">${title}</div>
+      ${detail ? `<div class="log-detail">${detail}</div>` : ''}
+      <div class="log-time mono">${nowStr()}</div>
+    </div>`;
+  els.log.prepend(entry);
+}
+
+function setBtnLoading(btn, loading, loadingText){
+  btn.disabled = loading;
+  const label = btn.querySelector('.btn-label');
+  if (loading){
+    btn.dataset.originalLabel = label.textContent;
+    label.innerHTML = `<span class="spinner"></span>${loadingText}`;
+  } else {
+    label.textContent = btn.dataset.originalLabel || label.textContent;
+  }
+}
+
+async function callGas(action, extra){
+  const res = await fetch(GAS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action, ...extra })
+  });
+  if (!res.ok) throw new Error('通信エラー: ' + res.status);
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error || '不明なエラー');
+  return json;
+}
+
+async function loadSettings(){
+  try{
+    const json = await callGas('getSettings');
+    const s = json.settings || {};
+    setTantousha(s.tantousha === 'A' || s.tantousha === 'B' ? s.tantousha : 'B');
+    if (s.dataDate) els.dataDate.value = s.dataDate;
+    if (s.deadline) els.deadline.value = s.deadline;
+    if (s.customStart) els.customStart.value = s.customStart;
+  } catch(err){
+    setTantousha('B');
+    addLog('err', '設定の読み込みに失敗しました', err.message);
+  }
+}
+
+els.runBtn.addEventListener('click', async () => {
+  if (!tantousha){
+    addLog('err', '担当者を選択してください');
+    return;
+  }
+  if (!els.dataDate.value || !els.deadline.value){
+    addLog('err', '全台予約日と納期日を入力してください');
+    return;
+  }
+  setBtnLoading(els.runBtn, true, '実行中…');
+  try{
+    const json = await callGas('runScheduling', {
+      settings: {
+        tantousha,
+        dataDate: els.dataDate.value,
+        deadline: els.deadline.value,
+        customStart: els.customStart.value || ""
+      }
+    });
+    const r = json.result;
+    addLog('ok', `完了：成功 ${r.successCount}件 / 失敗 ${r.failCount}件`, `担当者${r.tantousha}`);
+  } catch(err){
+    addLog('err', '全台予約の実行に失敗しました', err.message);
+  } finally {
+    setBtnLoading(els.runBtn, false);
+  }
+});
+
+els.cancelAllBtn.addEventListener('click', () => {
+  els.modal.classList.add('open');
+});
+els.modalNo.addEventListener('click', () => {
+  els.modal.classList.remove('open');
+});
+els.modalYes.addEventListener('click', async () => {
+  els.modal.classList.remove('open');
+  setBtnLoading(els.cancelAllBtn, true, '起動中…');
+  try{
+    await callGas('cancelAll');
+    addLog('info', '全台取消を起動しました', 'GitHub Actions側で実行中です。完了まで数分かかります。');
+  } catch(err){
+    addLog('err', '全台取消の起動に失敗しました', err.message);
+  } finally {
+    setBtnLoading(els.cancelAllBtn, false);
+  }
+});
+
+loadSettings();
+</script>
+</body>
+</html>
