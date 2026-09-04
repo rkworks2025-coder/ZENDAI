@@ -11,6 +11,14 @@ on:
         options:
           - reserve
           - cancel_all
+      pw_mode:
+        description: 'PWモード（現在有効な方を選択）'
+        required: true
+        type: choice
+        default: 'mode1'
+        options:
+          - mode1
+          - mode2
       station:
         description: 'ステーション名 (例: 大和テストST) ※reserve時のみ使用'
         required: false
@@ -53,9 +61,9 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           if [ "${{ github.event.inputs.action }}" = "cancel_all" ]; then
-            PAYLOAD='{"action": "cancel_all"}'
+            PAYLOAD="{\"action\": \"cancel_all\", \"pw_mode\": \"${{ github.event.inputs.pw_mode }}\"}"
           else
-            PAYLOAD="{\"action\": \"reserve\", \"station\": \"${{ github.event.inputs.station }}\", \"plate\": \"${{ github.event.inputs.plate }}\", \"reservation_time\": \"${{ github.event.inputs.reservation_time }}\"}"
+            PAYLOAD="{\"action\": \"reserve\", \"pw_mode\": \"${{ github.event.inputs.pw_mode }}\", \"station\": \"${{ github.event.inputs.station }}\", \"plate\": \"${{ github.event.inputs.plate }}\", \"reservation_time\": \"${{ github.event.inputs.reservation_time }}\"}"
           fi
           python main.py "$PAYLOAD"
 
