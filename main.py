@@ -19,11 +19,11 @@ DEFAULT_LOGIN_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/login/tawLog
 ROUTINE_STATION_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/routineStation.html"
 CANCEL_MAX_LOOP = 130
 
-TMA_ID = "REDACTED-REDACTED"
-# PWは定期的にmode1/mode2で切り替わるため、実行時にpw_modeで指定する（ハードコード禁止）
+TMA_ID = os.environ.get("TMA_ID", "")
+# PWは定期的にmode1/mode2で切り替わるため、実行時にpw_modeで指定する
 PW_TABLE = {
-    "mode1": "REDACTED",
-    "mode2": "REDACTED",
+    "mode1": os.environ.get("TMA_PW_MODE1", ""),
+    "mode2": os.environ.get("TMA_PW_MODE2", ""),
 }
 EVIDENCE_DIR = "evidence"
 

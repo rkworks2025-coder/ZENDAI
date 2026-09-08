@@ -59,6 +59,10 @@ jobs:
 
       - name: Run Automation Script (Manual / 手動テスト用)
         if: github.event_name == 'workflow_dispatch'
+        env:
+          TMA_ID: ${{ secrets.TMA_ID }}
+          TMA_PW_MODE1: ${{ secrets.TMA_PW_MODE1 }}
+          TMA_PW_MODE2: ${{ secrets.TMA_PW_MODE2 }}
         run: |
           if [ "${{ github.event.inputs.action }}" = "cancel_all" ]; then
             PAYLOAD="{\"action\": \"cancel_all\", \"pw_mode\": \"${{ github.event.inputs.pw_mode }}\"}"
@@ -69,6 +73,10 @@ jobs:
 
       - name: Run Automation Script (Webhook / GASからの連携用)
         if: github.event_name == 'repository_dispatch'
+        env:
+          TMA_ID: ${{ secrets.TMA_ID }}
+          TMA_PW_MODE1: ${{ secrets.TMA_PW_MODE1 }}
+          TMA_PW_MODE2: ${{ secrets.TMA_PW_MODE2 }}
         run: |
           PAYLOAD='${{ toJson(github.event.client_payload) }}'
           python main.py "$PAYLOAD"
