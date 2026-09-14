@@ -179,12 +179,15 @@ def reserve_vehicle(driver, station, plate, reservation_time):
 
     # 対象の車両ナンバーが画面内に表示されるまで待機
     print("   [STEP 2-b] 対象車両ナンバーの出現を待機中...")
-    wait.until(EC.presence_of_element_located((By.XPATH, f"//*[contains(text(), '{plate}')]")))
+    # 画面表示は「多摩 503 ワ 1661」のようにスペース区切りのため、
+    # DOM側のテキストからスペース（半角・全角）を除去してから比較する
+    plate_xpath = f"//*[contains(translate(text(), ' 　', ''), '{plate}')]"
+    wait.until(EC.presence_of_element_located((By.XPATH, plate_xpath)))
     print("   [STEP 2-c] 対象車両ナンバーを検出しました。")
 
     # 汎用的に対象の車両を含むブロック（行やリスト）を探し、その中の予約ボタンをクリックする
     print("   [STEP 2-d] 車両を含むブロック要素（祖先3階層以内）を検索中...")
-    blocks = driver.find_elements(By.XPATH, f"//*[contains(text(), '{plate}')]/ancestor::*[position()<=3]")
+    blocks = driver.find_elements(By.XPATH, f"{plate_xpath}/ancestor::*[position()<=3]")
     print(f"   [STEP 2-e] 候補ブロック数: {len(blocks)}件")
     reserve_button = None
 
