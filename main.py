@@ -193,11 +193,12 @@ def reserve_vehicle(driver, station, plate, reservation_time):
 
     for idx, block in enumerate(blocks):
         try:
-            btns = block.find_elements(By.XPATH, ".//button[contains(text(), '予約') or contains(@class, 'btn')] | .//a[contains(text(), '予約') or contains(@class, 'btn')]")
-            for btn in btns:
-                if "予約" in btn.text:
-                    reserve_button = btn
-                    break
+            # 実際のマークアップは <span class="link-btn"><a>予約</a></span>。
+            # <a>タグ自体にはclass属性が無く、"予約"の文字も<a>直下ではなく
+            # ネストした<span>内にあるため、text()ではなく`.`（配下全テキスト）で判定する。
+            btns = block.find_elements(By.XPATH, ".//span[contains(@class, 'link-btn')]/a[contains(., '予約')] | .//button[contains(., '予約')]")
+            if btns:
+                reserve_button = btns[0]
         except Exception as e:
             print(f"   [STEP 2-f] ブロック{idx}の検索中にエラー: {e}")
             continue
