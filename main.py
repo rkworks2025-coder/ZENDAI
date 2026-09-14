@@ -224,14 +224,28 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         use_date_element = wait.until(EC.presence_of_element_located((By.XPATH, "//select[contains(@name, 'Date') or contains(@id, 'Date') or contains(@name, 'date')]")))
         
         # 1. 日付
+        print(f"   [STEP 3-a] 日付プルダウンを選択します: {date_part}")
         select_date = Select(use_date_element)
         select_date.select_by_value(date_part)
-        
+
+        # TMA側は日付選択直後、まだ元の時刻（現在時刻付近）のタイムラインを表示しており、
+        # 時刻プルダウンの選択肢がJSで非同期に再生成される可能性があるため、
+        # 実際の反映内容をHTMLで記録した上で少し待機してから時刻を操作する
+        print("   [STEP 3-b] 日付選択直後のHTMLを保存します（時刻プルダウン操作前）。")
+        save_page_source(driver, "STEP3_AfterDateSelect")
+        time.sleep(1.5)
+
         # 2. 時間(時)
+        print(f"   [STEP 3-c] 時プルダウンを選択します: {hour_part}")
         select_hour = Select(driver.find_element(By.XPATH, "//select[contains(@name, 'Hour') or contains(@id, 'Hour') or contains(@name, 'hour')]"))
         select_hour.select_by_value(hour_part)
-        
+
+        print("   [STEP 3-d] 時選択後のHTMLを保存します（分プルダウン操作前）。")
+        save_page_source(driver, "STEP3_AfterHourSelect")
+        time.sleep(1.0)
+
         # 3. 時間(分)
+        print(f"   [STEP 3-e] 分プルダウンを選択します: {minute_part}")
         select_minute = Select(driver.find_element(By.XPATH, "//select[contains(@name, 'Minute') or contains(@id, 'Minute') or contains(@name, 'minute')]"))
         select_minute.select_by_value(minute_part)
         
