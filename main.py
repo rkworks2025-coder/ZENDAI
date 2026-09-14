@@ -79,6 +79,19 @@ def input_strict(driver, selector_str, value):
         take_screenshot(driver, "ERROR_InputFailed")
         raise Exception(f"入力失敗 (Timeout): {selector_str}") from e
 
+def save_page_source(driver, name):
+    """診断用: 現在のページHTMLをevidenceに保存"""
+    if not os.path.exists(EVIDENCE_DIR):
+        os.makedirs(EVIDENCE_DIR)
+    timestamp = datetime.datetime.now().strftime('%H%M%S')
+    filename = f"{EVIDENCE_DIR}/{name}_{timestamp}.html"
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            f.write(driver.page_source)
+        print(f"   [HTML] 保存: {filename}")
+    except Exception as e:
+        print(f"   [HTML] 保存失敗: {e}")
+
 def handle_popups(driver):
     """ボタン押下後のポップアップ処理セット（確認ダイアログ等）"""
     try:
@@ -160,24 +173,33 @@ def reserve_vehicle(driver, station, plate, reservation_time):
     # ----------------------------------------------------
     print(f"   [STEP 2] 車両一覧画面で対象車両 '{plate}' の予約ボタンを検索中...")
     time.sleep(2) # 画面遷移の確実な待機
-    
+
+    print("   [STEP 2-a] 車両一覧ページのHTMLを保存します（検索処理を行う前）。")
+    save_page_source(driver, "STEP2_VehicleListPage")
+
     # 対象の車両ナンバーが画面内に表示されるまで待機
+    print("   [STEP 2-b] 対象車両ナンバーの出現を待機中...")
     wait.until(EC.presence_of_element_located((By.XPATH, f"//*[contains(text(), '{plate}')]")))
-    
+    print("   [STEP 2-c] 対象車両ナンバーを検出しました。")
+
     # 汎用的に対象の車両を含むブロック（行やリスト）を探し、その中の予約ボタンをクリックする
+    print("   [STEP 2-d] 車両を含むブロック要素（祖先3階層以内）を検索中...")
     blocks = driver.find_elements(By.XPATH, f"//*[contains(text(), '{plate}')]/ancestor::*[position()<=3]")
+    print(f"   [STEP 2-e] 候補ブロック数: {len(blocks)}件")
     reserve_button = None
-    
-    for block in blocks:
+
+    for idx, block in enumerate(blocks):
         try:
             btns = block.find_elements(By.XPATH, ".//button[contains(text(), '予約') or contains(@class, 'btn')] | .//a[contains(text(), '予約') or contains(@class, 'btn')]")
             for btn in btns:
                 if "予約" in btn.text:
                     reserve_button = btn
                     break
-        except:
+        except Exception as e:
+            print(f"   [STEP 2-f] ブロック{idx}の検索中にエラー: {e}")
             continue
         if reserve_button:
+            print(f"   [STEP 2-g] ブロック{idx}で予約ボタンを発見しました。")
             break
             
     if reserve_button:
