@@ -251,7 +251,7 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         
         # 4. 【超重要】予約時間を15分に変更
         print("   【重要】予約時間をデフォルトの30分から15分に変更します。")
-        select_duration = Select(driver.find_element(By.XPATH, "//select[contains(@name, 'Time') or contains(@id, 'Time') or contains(@name, 'duration') or contains(@name, 'useTime')]"))
+        select_duration = Select(driver.find_element(By.XPATH, "//select[contains(@name, 'Time') or contains(@id, 'Time') or contains(@name, 'duration') or contains(@name, 'useTime') or contains(@name, 'Priod') or contains(@id, 'Priod')]"))
         try:
             select_duration.select_by_value("15")
         except:
@@ -259,7 +259,7 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         
         # 5. 確定ボタンのクリック
         print("   予約内容を確定します。")
-        submit_button = driver.find_element(By.XPATH, "//button[contains(text(), '確認') or contains(text(), '確定') or contains(text(), '登録')]")
+        submit_button = driver.find_element(By.XPATH, "//button[contains(text(), '確認') or contains(text(), '確定') or contains(text(), '登録')] | //input[@type='submit' and (contains(@value, '確認') or contains(@value, '確定') or contains(@value, '登録'))]")
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", submit_button)
         time.sleep(0.5)
         submit_button.click()
