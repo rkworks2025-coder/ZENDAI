@@ -185,27 +185,23 @@ def reserve_vehicle(driver, station, plate, reservation_time):
     wait.until(EC.presence_of_element_located((By.XPATH, plate_xpath)))
     print("   [STEP 2-c] 対象車両ナンバーを検出しました。")
 
-    # 汎用的に対象の車両を含むブロック（行やリスト）を探し、その中の予約ボタンをクリックする
-    print("   [STEP 2-d] 車両を含むブロック要素（祖先3階層以内）を検索中...")
-    blocks = driver.find_elements(By.XPATH, f"{plate_xpath}/ancestor::*[position()<=3]")
-    print(f"   [STEP 2-e] 候補ブロック数: {len(blocks)}件")
+    # 対象車両を囲む「car-list-box」（1台分の情報だけを含む最小単位）を直接特定する。
+    # 以前は ancestor::*[position()<=3] で祖先3階層をまとめて取得していたが、
+    # Seleniumが返す順序は外側の要素が先になるため、3階層目（最も外側）が
+    # 「STの全車両を含むリスト全体」に達してしまい、その中の最初の予約リンク
+    # （＝ドキュメント順で先に出現する別車両のリンク）を誤ってクリックする不具合があった。
+    # car-list-box要素はちょうど1台分のみを囲むため、これをピンポイントに取得する。
+    print("   [STEP 2-d] 対象車両を囲む car-list-box を特定中...")
     reserve_button = None
+    try:
+        car_block = driver.find_element(By.XPATH, f"({plate_xpath}/ancestor::div[contains(@class, 'car-list-box')])[1]")
+        btns = car_block.find_elements(By.XPATH, ".//span[contains(@class, 'link-btn')]/a[contains(., '予約')] | .//button[contains(., '予約')]")
+        if btns:
+            reserve_button = btns[0]
+            print("   [STEP 2-e] 対象車両の予約ボタンを発見しました。")
+    except Exception as e:
+        print(f"   [STEP 2-f] car-list-box特定中にエラー: {e}")
 
-    for idx, block in enumerate(blocks):
-        try:
-            # 実際のマークアップは <span class="link-btn"><a>予約</a></span>。
-            # <a>タグ自体にはclass属性が無く、"予約"の文字も<a>直下ではなく
-            # ネストした<span>内にあるため、text()ではなく`.`（配下全テキスト）で判定する。
-            btns = block.find_elements(By.XPATH, ".//span[contains(@class, 'link-btn')]/a[contains(., '予約')] | .//button[contains(., '予約')]")
-            if btns:
-                reserve_button = btns[0]
-        except Exception as e:
-            print(f"   [STEP 2-f] ブロック{idx}の検索中にエラー: {e}")
-            continue
-        if reserve_button:
-            print(f"   [STEP 2-g] ブロック{idx}で予約ボタンを発見しました。")
-            break
-            
     if reserve_button:
         print(f"   対象車両 '{plate}' の予約ボタンを発見しました。予約入力画面へ遷移します。")
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", reserve_button)
@@ -266,6 +262,17 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         
         time.sleep(3)
         handle_popups(driver) # モーダルが出る場合に対応
+
+        # 成功判定: エラー時（例: 「予約できない時間帯が含まれています」）は
+        # 送信前と同じ「登録」ボタンが残った確認画面のまま留まる。これまでは
+        # 例外が起きないため無条件に成功と判定していたが、実際には登録されて
+        # いないケースがあったため、送信後も同じボタンが残っているかで判定する。
+        still_on_form = driver.find_elements(By.XPATH, "//input[@type='submit' and contains(@value, '登録')] | //button[contains(text(), '登録')]")
+        if still_on_form:
+            save_page_source(driver, "ERROR_StillOnReservationForm")
+            take_screenshot(driver, "ERROR_ReservationRejected")
+            raise Exception("送信後も予約フォームの「登録」ボタンが残っています。画面上にエラーメッセージが出ている可能性があります（evidence参照）。")
+
         print("   [OK] 予約処理が完了しました。")
         take_screenshot(driver, "SUCCESS_ReservationCompleted")
 
