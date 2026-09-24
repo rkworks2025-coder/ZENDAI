@@ -387,7 +387,11 @@ def reserve_list(driver, password, items, callback_url, token):
         station = str(item.get("st", "")).strip()
         plate = str(item.get("pl", "")).strip()
         rtime = str(item.get("t", "")).strip()
-        print(f"\n===== [{i}/{total}] 行{row}: {rtime} / {station} / {plate} =====")
+        # GitHub Actionsのログで1件ごとに折りたたみ表示にする（::group:: / ::endgroup::）
+        print(f"::group::[{i}/{total}] 行{row} {rtime} {station} {plate}")
+        started = time.time()
+        result_ok = False
+        err_msg = ""
 
         try:
             if not is_driver_alive(driver):
@@ -400,13 +404,22 @@ def reserve_list(driver, password, items, callback_url, token):
                 login_(driver, password)
 
             reserve_vehicle(driver, station, plate, rtime)
+            result_ok = True
+        except Exception as e:
+            err_msg = str(e).split("\n")[0][:150]
+            print(f"   [NG] 行{row} の予約に失敗しました: {err_msg}")
+        print("::endgroup::")
+
+        # 折りたたみの外に、1件ごとの結果・所要時間・累計を表示する
+        elapsed = int(time.time() - started)
+        if result_ok:
             ok_count += 1
             post_callback(callback_url, token, row, "ok", "")
-        except Exception as e:
-            msg = str(e).split("\n")[0][:150]
-            print(f"   [NG] 行{row} の予約に失敗しました: {msg}")
-            ng_list.append((row, plate, msg))
-            post_callback(callback_url, token, row, "ng", msg)
+        else:
+            ng_list.append((row, plate, err_msg))
+            post_callback(callback_url, token, row, "ng", err_msg)
+        status_label = "OK" if result_ok else f"NG（{err_msg}）"
+        print(f"[{i}/{total}] {status_label} {elapsed}秒 / 累計 成功{ok_count}・失敗{len(ng_list)} / 残り{total - i}件")
 
     print(f"\n--- リスト一括予約 完了: 成功 {ok_count}件 / 失敗 {len(ng_list)}件（全{total}件） ---")
     for row, plate, msg in ng_list:
