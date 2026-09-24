@@ -34,6 +34,11 @@ on:
   repository_dispatch:
     types: [webhook_from_gas]
 
+# 予約・取消が同時に走ってTMA側で競合しないよう、1本ずつ順番に実行する
+concurrency:
+  group: zendai-tma
+  cancel-in-progress: false
+
 jobs:
   run-script:
     runs-on: ubuntu-latest
@@ -63,12 +68,14 @@ jobs:
           TMA_ID: ${{ secrets.TMA_ID }}
           TMA_PW_MODE1: ${{ secrets.TMA_PW_MODE1 }}
           TMA_PW_MODE2: ${{ secrets.TMA_PW_MODE2 }}
+          IN_ACTION: ${{ github.event.inputs.action }}
+          IN_PW_MODE: ${{ github.event.inputs.pw_mode }}
+          IN_STATION: ${{ github.event.inputs.station }}
+          IN_PLATE: ${{ github.event.inputs.plate }}
+          IN_TIME: ${{ github.event.inputs.reservation_time }}
         run: |
-          if [ "${{ github.event.inputs.action }}" = "cancel_all" ]; then
-            PAYLOAD="{\"action\": \"cancel_all\", \"pw_mode\": \"${{ github.event.inputs.pw_mode }}\"}"
-          else
-            PAYLOAD="{\"action\": \"reserve\", \"pw_mode\": \"${{ github.event.inputs.pw_mode }}\", \"station\": \"${{ github.event.inputs.station }}\", \"plate\": \"${{ github.event.inputs.plate }}\", \"reservation_time\": \"${{ github.event.inputs.reservation_time }}\"}"
-          fi
+          # 入力値は環境変数経由でPythonに渡してJSON化する（ステーション名の ' や " でシェルが壊れないように）
+          PAYLOAD=$(python -c 'import json,os; a=os.environ["IN_ACTION"]; d={"action":a,"pw_mode":os.environ["IN_PW_MODE"]}; d.update({} if a=="cancel_all" else {"station":os.environ["IN_STATION"],"plate":os.environ["IN_PLATE"],"reservation_time":os.environ["IN_TIME"]}); print(json.dumps(d, ensure_ascii=False))')
           python main.py "$PAYLOAD"
 
       - name: Run Automation Script (Webhook / GASからの連携用)
@@ -77,8 +84,9 @@ jobs:
           TMA_ID: ${{ secrets.TMA_ID }}
           TMA_PW_MODE1: ${{ secrets.TMA_PW_MODE1 }}
           TMA_PW_MODE2: ${{ secrets.TMA_PW_MODE2 }}
+          # client_payloadは環境変数経由で渡す（シェルの引用符に直接埋め込むと ' を含むステーション名で壊れるため）
+          PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
-          PAYLOAD='${{ toJson(github.event.client_payload) }}'
           python main.py "$PAYLOAD"
 
       - name: Upload Evidence
