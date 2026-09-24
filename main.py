@@ -3,6 +3,7 @@ import os
 import time
 import datetime
 import json
+import urllib.request
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -92,6 +93,15 @@ def save_page_source(driver, name):
     except Exception as e:
         print(f"   [HTML] 保存失敗: {e}")
 
+def xpath_literal(s):
+    """XPath用の文字列リテラル化（ステーション名に ' や " が含まれても壊れないようにする）"""
+    if "'" not in s:
+        return f"'{s}'"
+    if '"' not in s:
+        return f'"{s}"'
+    parts = s.split("'")
+    return "concat(" + ", \"'\", ".join(f"'{p}'" for p in parts) + ")"
+
 def handle_popups(driver):
     """ボタン押下後のポップアップ処理セット（確認ダイアログ等）"""
     try:
@@ -145,7 +155,7 @@ def reserve_vehicle(driver, station, plate, reservation_time):
     station_found = False
     while True:
         # aタグの中に指定のステーション名を持つspanがあるか探す
-        station_links = driver.find_elements(By.XPATH, f"//a[.//span[contains(@class, 'assignStationNm') and contains(text(), '{station}')]]")
+        station_links = driver.find_elements(By.XPATH, f"//a[.//span[contains(@class, 'assignStationNm') and contains(text(), {xpath_literal(station)})]]")
         
         if station_links:
             print(f"   対象ステーション '{station}' を発見しました。車両一覧へ遷移します。")
@@ -181,7 +191,7 @@ def reserve_vehicle(driver, station, plate, reservation_time):
     print("   [STEP 2-b] 対象車両ナンバーの出現を待機中...")
     # 画面表示は「多摩 503 ワ 1661」のようにスペース区切りのため、
     # DOM側のテキストからスペース（半角・全角）を除去してから比較する
-    plate_xpath = f"//*[contains(translate(text(), ' 　', ''), '{plate}')]"
+    plate_xpath = f"//*[contains(translate(text(), ' 　', ''), {xpath_literal(plate)})]"
     wait.until(EC.presence_of_element_located((By.XPATH, plate_xpath)))
     print("   [STEP 2-c] 対象車両ナンバーを検出しました。")
 
@@ -333,6 +343,77 @@ def cancel_all_reservations(driver):
     print(f"   [OK] 全件取消処理が完了しました。（合計 {count} 件）")
 
 # ==========================================
+# リスト一括予約処理
+# ==========================================
+def post_callback(callback_url, token, row, status, message):
+    """1件ごとの結果をGAS（全台予約管理メイン）へ送り、「自動予約用」シートG列に書き込ませる。
+    送信に失敗しても予約処理自体は止めない。"""
+    if not callback_url:
+        return
+    body = json.dumps({
+        "action": "reportReserveResult",
+        "token": token,
+        "row": row,
+        "status": status,
+        "message": message,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        callback_url, data=body, method="POST",
+        headers={"Content-Type": "text/plain;charset=utf-8"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as res:
+            res.read()
+    except Exception as e:
+        print(f"   [通知] GASへの結果送信に失敗しました（行{row}）: {e}")
+
+def is_driver_alive(driver):
+    try:
+        _ = driver.title
+        return True
+    except Exception:
+        return False
+
+def reserve_list(driver, password, items, callback_url, token):
+    """items: [{"r": 行番号, "st": ステーション, "pl": ナンバー, "t": "YYYY-MM-DD HH:MM"}, ...]
+    1件失敗しても止めず、次の行へ進む。ブラウザが落ちた場合は再起動して再ログインする。"""
+    total = len(items)
+    print(f"\n--- [処理開始] リスト一括予約: {total}件 ---")
+    ok_count = 0
+    ng_list = []
+
+    for i, item in enumerate(items, start=1):
+        row = item.get("r")
+        station = str(item.get("st", "")).strip()
+        plate = str(item.get("pl", "")).strip()
+        rtime = str(item.get("t", "")).strip()
+        print(f"\n===== [{i}/{total}] 行{row}: {rtime} / {station} / {plate} =====")
+
+        try:
+            if not is_driver_alive(driver):
+                print("   ブラウザが停止していたため再起動して再ログインします。")
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+                driver = get_chrome_driver()
+                login_(driver, password)
+
+            reserve_vehicle(driver, station, plate, rtime)
+            ok_count += 1
+            post_callback(callback_url, token, row, "ok", "")
+        except Exception as e:
+            msg = str(e).split("\n")[0][:150]
+            print(f"   [NG] 行{row} の予約に失敗しました: {msg}")
+            ng_list.append((row, plate, msg))
+            post_callback(callback_url, token, row, "ng", msg)
+
+    print(f"\n--- リスト一括予約 完了: 成功 {ok_count}件 / 失敗 {len(ng_list)}件（全{total}件） ---")
+    for row, plate, msg in ng_list:
+        print(f"   NG 行{row} {plate}: {msg}")
+    return driver, ok_count, ng_list
+
+# ==========================================
 # メイン処理
 # ==========================================
 def main():
@@ -359,6 +440,7 @@ def main():
     password = PW_TABLE[pw_mode]
 
     driver = get_chrome_driver()
+    exit_code = 0
 
     try:
         # [1] ログイン
@@ -371,13 +453,27 @@ def main():
             reservation_time = data.get('reservation_time', '2026-02-24 10:30')
             print(f"Target -> ST: {target_station}, Plate: {target_plate}, Time: {reservation_time}")
             reserve_vehicle(driver, target_station, target_plate, reservation_time)
+        elif target_action == 'reserve_list':
+            items = data.get('items') or []
+            if not items:
+                raise Exception("予約リスト（items）が空です")
+            driver, ok_count, ng_list = reserve_list(
+                driver, password, items,
+                data.get('callback_url', ''), data.get('token', '')
+            )
+            # 1件でも失敗があればジョブを失敗扱い（赤表示）にする（成功分はTMAに登録済み）
+            if ng_list:
+                exit_code = 1
         elif target_action == 'cancel_all':
             cancel_all_reservations(driver)
         else:
             raise Exception(f"未対応のactionです: {target_action}")
 
-        print("\n=== SUCCESS: 全工程完了 ===")
-        sys.exit(0)
+        if exit_code == 0:
+            print("\n=== SUCCESS: 全工程完了 ===")
+        else:
+            print("\n=== 完了（失敗あり） ===")
+        sys.exit(exit_code)
 
     except Exception as e:
         print(f"\n[!!!] CRITICAL ERROR [!!!]\n{e}")
