@@ -11,6 +11,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 from webdriver_manager.chrome import ChromeDriverManager
 
 # ==========================================
@@ -169,8 +170,27 @@ def reserve_vehicle(driver, station, plate, reservation_time):
             next_buttons = driver.find_elements(By.XPATH, "//a[@id='assignNextPageBtn']")
             if next_buttons and next_buttons[0].is_displayed():
                 print("   現在のページに対象STがないため、次のページへ遷移します。")
+                # ページ遷移待ち: 固定2秒ではなく「一覧の先頭STが切り替わるまで」待つ（上限20秒）
+                old_names = driver.find_elements(By.XPATH, "//span[contains(@class, 'assignStationNm')]")
+                old_el = old_names[0] if old_names else None
+                old_text = old_el.text if old_el else ""
                 driver.execute_script("arguments[0].click();", next_buttons[0])
-                time.sleep(2) # ページ遷移待ち
+
+                def _list_changed(d):
+                    try:
+                        cur = d.find_elements(By.XPATH, "//span[contains(@class, 'assignStationNm')]")
+                        if not cur:
+                            return False
+                        return cur[0] != old_el or cur[0].text != old_text
+                    except StaleElementReferenceException:
+                        return False
+
+                try:
+                    WebDriverWait(driver, 20).until(_list_changed)
+                except TimeoutException:
+                    # 切替を検知できなくてもエラーにはせず、そのまま次の検索に進む
+                    print("   [注意] ページ切替を20秒以内に検知できませんでした。検索を続行します。")
+                time.sleep(0.3)
             else:
                 take_screenshot(driver, "ERROR_StationNotFound")
                 raise Exception(f"エラー: 対象ステーション '{station}' が見つかりませんでした。")
@@ -182,17 +202,14 @@ def reserve_vehicle(driver, station, plate, reservation_time):
     # STEP 2: 車両一覧画面で黄色い「予約」ボタンをクリック
     # ----------------------------------------------------
     print(f"   [STEP 2] 車両一覧画面で対象車両 '{plate}' の予約ボタンを検索中...")
-    time.sleep(2) # 画面遷移の確実な待機
-
-    print("   [STEP 2-a] 車両一覧ページのHTMLを保存します（検索処理を行う前）。")
-    save_page_source(driver, "STEP2_VehicleListPage")
+    # 画面遷移の固定待機（2秒）は廃止し、下の車両ナンバー出現待ち（上限30秒）で遷移完了を判定する
 
     # 対象の車両ナンバーが画面内に表示されるまで待機
     print("   [STEP 2-b] 対象車両ナンバーの出現を待機中...")
     # 画面表示は「多摩 503 ワ 1661」のようにスペース区切りのため、
     # DOM側のテキストからスペース（半角・全角）を除去してから比較する
     plate_xpath = f"//*[contains(translate(text(), ' 　', ''), {xpath_literal(plate)})]"
-    wait.until(EC.presence_of_element_located((By.XPATH, plate_xpath)))
+    WebDriverWait(driver, 30).until(EC.presence_of_element_located((By.XPATH, plate_xpath)))
     print("   [STEP 2-c] 対象車両ナンバーを検出しました。")
 
     # 対象車両を囲む「car-list-box」（1台分の情報だけを含む最小単位）を直接特定する。
@@ -236,9 +253,7 @@ def reserve_vehicle(driver, station, plate, reservation_time):
 
         # TMA側は日付選択直後、まだ元の時刻（現在時刻付近）のタイムラインを表示しており、
         # 時刻プルダウンの選択肢がJSで非同期に再生成される可能性があるため、
-        # 実際の反映内容をHTMLで記録した上で少し待機してから時刻を操作する
-        print("   [STEP 3-b] 日付選択直後のHTMLを保存します（時刻プルダウン操作前）。")
-        save_page_source(driver, "STEP3_AfterDateSelect")
+        # 少し待機してから時刻を操作する
         time.sleep(1.5)
 
         # 2. 時間(時)
@@ -246,8 +261,6 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         select_hour = Select(driver.find_element(By.XPATH, "//select[contains(@name, 'Hour') or contains(@id, 'Hour') or contains(@name, 'hour')]"))
         select_hour.select_by_value(hour_part)
 
-        print("   [STEP 3-d] 時選択後のHTMLを保存します（分プルダウン操作前）。")
-        save_page_source(driver, "STEP3_AfterHourSelect")
         time.sleep(1.0)
 
         # 3. 時間(分)
@@ -269,9 +282,44 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", submit_button)
         time.sleep(0.5)
         submit_button.click()
-        
-        time.sleep(3)
-        handle_popups(driver) # モーダルが出る場合に対応
+
+        # 確定後の待機: 固定3秒＋ポップアップ待ち5秒をやめ、
+        # 「確認ポップアップが出る」か「予約フォームから画面が切り替わる」のどちらかを待つ（上限30秒）
+        form_btn_xpath = "//input[@type='submit' and contains(@value, '登録')] | //button[contains(text(), '登録')]"
+
+        def _after_submit(d):
+            try:
+                pop = d.find_elements(By.ID, "posupMessageConfirmOk")
+                if pop and pop[0].is_displayed():
+                    return "popup"
+                submit_button.is_enabled()  # 画面が切り替わっていれば stale 例外になる
+                if not d.find_elements(By.XPATH, form_btn_xpath):
+                    return "left"
+                return False
+            except StaleElementReferenceException:
+                return "left"
+
+        try:
+            state = WebDriverWait(driver, 30).until(_after_submit)
+        except TimeoutException:
+            state = None
+
+        if state == "popup":
+            print("   確認ポップアップ検知 -> 「OK/完了」をクリック")
+            pop_btn = driver.find_element(By.ID, "posupMessageConfirmOk")
+            driver.execute_script("arguments[0].click();", pop_btn)
+
+            def _left_form(d):
+                try:
+                    submit_button.is_enabled()
+                    return not d.find_elements(By.XPATH, form_btn_xpath)
+                except StaleElementReferenceException:
+                    return True
+
+            try:
+                WebDriverWait(driver, 20).until(_left_form)
+            except TimeoutException:
+                pass
 
         # 成功判定: エラー時（例: 「予約できない時間帯が含まれています」）は
         # 送信前と同じ「登録」ボタンが残った確認画面のまま留まる。これまでは
@@ -284,7 +332,6 @@ def reserve_vehicle(driver, station, plate, reservation_time):
             raise Exception("送信後も予約フォームの「登録」ボタンが残っています。画面上にエラーメッセージが出ている可能性があります（evidence参照）。")
 
         print("   [OK] 予約処理が完了しました。")
-        take_screenshot(driver, "SUCCESS_ReservationCompleted")
 
     except Exception as e:
         print(f"   [エラー] 予約入力中の処理に失敗しました: {e}")
