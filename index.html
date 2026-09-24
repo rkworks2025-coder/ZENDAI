@@ -112,6 +112,11 @@
     animation:spin .7s linear infinite;
   }
   .btn-danger .spinner{ border:2px solid rgba(226,87,76,.25); border-top-color:var(--coral); }
+  .btn-reserve{
+    background:transparent; color:var(--green); border:1px solid rgba(95,191,138,0.45);
+  }
+  .btn-reserve:not(:disabled):hover{ background:rgba(95,191,138,0.10); }
+  .btn-reserve .spinner{ border:2px solid rgba(95,191,138,.25); border-top-color:var(--green); }
   @keyframes spin{ to{ transform:rotate(360deg); } }
 
   .log{
@@ -144,6 +149,7 @@
     padding:24px; max-width:360px; width:100%;
   }
   .modal h3{ margin:0 0 10px; font-size:16px; color:var(--coral); }
+  .modal h3.ok{ color:var(--green); }
   .modal p{ margin:0 0 20px; font-size:13px; color:var(--text-dim); }
   .modal .modal-actions{ display:flex; gap:10px; }
   .modal .modal-actions .btn{ flex:1; padding:12px; font-size:14px; }
@@ -189,6 +195,9 @@
       <button class="btn btn-primary" id="runBtn">
         <span class="btn-label">全台予約を実行</span>
       </button>
+      <button class="btn btn-reserve" id="reserveAutoBtn">
+        <span class="btn-label">TMAに一括予約（自動予約用シート）</span>
+      </button>
       <button class="btn btn-danger" id="cancelAllBtn">
         <span class="btn-label">予約オールクリア（全台取消）</span>
       </button>
@@ -213,6 +222,17 @@
     </div>
   </div>
 
+  <div class="modal-overlay" id="reserveModal">
+    <div class="modal">
+      <h3 class="ok">TMAに一括予約しますか？</h3>
+      <p id="reserveModalText" style="white-space:pre-line;">「自動予約用」シートのリストをTMAに予約します。</p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="reserveModalNo">やめる</button>
+        <button class="btn btn-reserve" id="reserveModalYes">予約を実行</button>
+      </div>
+    </div>
+  </div>
+
 <script>
 const GAS_URL = "https://script.google.com/macros/s/AKfycbxTjlaNnILoLQBLdxnvBHZ85hVx2KmWxv1Je8TsCLicLI_uJLsgvg7sLcRp-JZMHwc3/exec";
 
@@ -224,6 +244,11 @@ const els = {
   customStart: document.getElementById('customStart'),
   runBtn: document.getElementById('runBtn'),
   cancelAllBtn: document.getElementById('cancelAllBtn'),
+  reserveAutoBtn: document.getElementById('reserveAutoBtn'),
+  reserveModal: document.getElementById('reserveModal'),
+  reserveModalText: document.getElementById('reserveModalText'),
+  reserveModalNo: document.getElementById('reserveModalNo'),
+  reserveModalYes: document.getElementById('reserveModalYes'),
   log: document.getElementById('log'),
   modal: document.getElementById('cancelModal'),
   modalNo: document.getElementById('cancelModalNo'),
@@ -358,6 +383,50 @@ els.modalYes.addEventListener('click', async () => {
     addLog('err', '全台取消の起動に失敗しました', err.message);
   } finally {
     setBtnLoading(els.cancelAllBtn, false);
+  }
+});
+
+// ===== TMAリスト一括予約（自動予約用シート） =====
+els.reserveAutoBtn.addEventListener('click', async () => {
+  // 試験段階のため片山（担当者B）のみ対応
+  if (tantousha !== 'B'){
+    addLog('err', '一括予約は現在 片山（担当者B）のみ対応しています');
+    return;
+  }
+  if (!pwMode){
+    addLog('err', 'PWモードを選択してください');
+    return;
+  }
+  setBtnLoading(els.reserveAutoBtn, true, '件数確認中…');
+  try{
+    const json = await callGas('getAutoReserveCount');
+    const count = json.count || 0;
+    if (count === 0){
+      addLog('err', '予約対象がありません', '「自動予約用」シートに予約日時・ステーション・ナンバーのそろった行がありません');
+      return;
+    }
+    els.reserveModalText.textContent =
+      `担当者：片山（B）／ pw_mode：${pwMode}\n「自動予約用」シートの ${count}件 をTMAに予約します。\n進捗は同シートのG列に表示されます。`;
+    els.reserveModal.classList.add('open');
+  } catch(err){
+    addLog('err', '予約リストの確認に失敗しました', err.message);
+  } finally {
+    setBtnLoading(els.reserveAutoBtn, false);
+  }
+});
+els.reserveModalNo.addEventListener('click', () => {
+  els.reserveModal.classList.remove('open');
+});
+els.reserveModalYes.addEventListener('click', async () => {
+  els.reserveModal.classList.remove('open');
+  setBtnLoading(els.reserveAutoBtn, true, '起動中…');
+  try{
+    const json = await callGas('reserveAuto', { pw_mode: pwMode });
+    addLog('info', `一括予約を起動しました（${json.count}件）`, `pw_mode: ${pwMode} / 進捗は「自動予約用」シートG列で確認できます。`);
+  } catch(err){
+    addLog('err', '一括予約の起動に失敗しました', err.message);
+  } finally {
+    setBtnLoading(els.reserveAutoBtn, false);
   }
 });
 
