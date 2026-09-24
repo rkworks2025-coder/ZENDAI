@@ -68,6 +68,8 @@ jobs:
           TMA_ID: ${{ secrets.TMA_ID }}
           TMA_PW_MODE1: ${{ secrets.TMA_PW_MODE1 }}
           TMA_PW_MODE2: ${{ secrets.TMA_PW_MODE2 }}
+          # 出力をバッファせず、ログをリアルタイムでActions画面に流す
+          PYTHONUNBUFFERED: "1"
           IN_ACTION: ${{ github.event.inputs.action }}
           IN_PW_MODE: ${{ github.event.inputs.pw_mode }}
           IN_STATION: ${{ github.event.inputs.station }}
@@ -84,6 +86,8 @@ jobs:
           TMA_ID: ${{ secrets.TMA_ID }}
           TMA_PW_MODE1: ${{ secrets.TMA_PW_MODE1 }}
           TMA_PW_MODE2: ${{ secrets.TMA_PW_MODE2 }}
+          # 出力をバッファせず、ログをリアルタイムでActions画面に流す
+          PYTHONUNBUFFERED: "1"
           # client_payloadは環境変数経由で渡す（シェルの引用符に直接埋め込むと ' を含むステーション名で壊れるため）
           PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
