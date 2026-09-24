@@ -11,7 +11,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select
-from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException, ElementClickInterceptedException
 from webdriver_manager.chrome import ChromeDriverManager
 
 # ==========================================
@@ -20,6 +20,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 DEFAULT_LOGIN_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/login/tawLogin.html"
 ROUTINE_STATION_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/routineStation.html"
 CANCEL_MAX_LOOP = 130
+# 一括予約で一時的な失敗が起きた場合の最大試行回数（初回を含む）
+RESERVE_MAX_ATTEMPTS = 3
 
 TMA_ID = os.environ.get("TMA_ID", "")
 # PWは定期的にmode1/mode2で切り替わるため、実行時にpw_modeで指定する
@@ -103,6 +105,36 @@ def xpath_literal(s):
     parts = s.split("'")
     return "concat(" + ", \"'\", ".join(f"'{p}'" for p in parts) + ")"
 
+class ReservationRejected(Exception):
+    """TMAに予約を拒否された（送信後もフォームに留まった＝他の予約と重複など）。リトライしない。"""
+    pass
+
+class ReservationUnknown(Exception):
+    """送信後に結果を判定できなかった（予約が入った可能性あり）。二重予約防止のためリトライしない。"""
+    pass
+
+def safe_click(driver, el):
+    """通常クリック。別要素に遮られた場合のみJavaScriptで直接クリックし直す。"""
+    try:
+        el.click()
+    except ElementClickInterceptedException:
+        print("   [注意] クリックが遮られたため、JavaScriptで直接クリックします。")
+        driver.execute_script("arguments[0].click();", el)
+
+def get_form_error_text(driver):
+    """予約フォーム上に表示されたエラー文を取得する（取れなければ空文字）"""
+    xpath = ("//*[contains(@class, 'error') or contains(@class, 'alert') or contains(@class, 'invalid') "
+             "or contains(@class, 'message')][normalize-space()]")
+    try:
+        for el in driver.find_elements(By.XPATH, xpath):
+            if el.is_displayed():
+                txt = " ".join(el.text.split())
+                if txt:
+                    return txt[:100]
+    except Exception:
+        pass
+    return ""
+
 def handle_popups(driver):
     """ボタン押下後のポップアップ処理セット（確認ダイアログ等）"""
     try:
@@ -162,7 +194,7 @@ def reserve_vehicle(driver, station, plate, reservation_time):
             print(f"   対象ステーション '{station}' を発見しました。車両一覧へ遷移します。")
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", station_links[0])
             time.sleep(0.5)
-            station_links[0].click()
+            safe_click(driver, station_links[0])
             station_found = True
             break
         else:
@@ -233,7 +265,7 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         print(f"   対象車両 '{plate}' の予約ボタンを発見しました。予約入力画面へ遷移します。")
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", reserve_button)
         time.sleep(0.5)
-        reserve_button.click()
+        safe_click(driver, reserve_button)
     else:
         take_screenshot(driver, "ERROR_VehicleNotFound")
         raise Exception(f"エラー: 車両 '{plate}' またはその予約ボタンが見つかりませんでした。")
@@ -242,6 +274,8 @@ def reserve_vehicle(driver, station, plate, reservation_time):
     # STEP 3: 予約入力画面 (プルダウン操作)
     # ----------------------------------------------------
     print("   [STEP 3] 予約入力画面の読み込みを待機しています...")
+    # 確定ボタンのクリックが通ったかどうか（通った後の失敗はリトライすると二重予約の恐れがある）
+    submitted = False
     try:
         # 日付選択のプルダウンが表示されるまで待機
         use_date_element = wait.until(EC.presence_of_element_located((By.XPATH, "//select[contains(@name, 'Date') or contains(@id, 'Date') or contains(@name, 'date')]")))
@@ -282,6 +316,7 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", submit_button)
         time.sleep(0.5)
         submit_button.click()
+        submitted = True
 
         # 確定後の待機: 固定3秒＋ポップアップ待ち5秒をやめ、
         # 「確認ポップアップが出る」か「予約フォームから画面が切り替わる」のどちらかを待つ（上限30秒）
@@ -303,6 +338,10 @@ def reserve_vehicle(driver, station, plate, reservation_time):
             state = WebDriverWait(driver, 30).until(_after_submit)
         except TimeoutException:
             state = None
+
+        if state is None:
+            take_screenshot(driver, "ERROR_NoResponseAfterSubmit")
+            raise ReservationUnknown("送信後30秒以内に画面が変化せず、予約の成否を判定できませんでした")
 
         if state == "popup":
             print("   確認ポップアップ検知 -> 「OK/完了」をクリック")
@@ -329,13 +368,19 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         if still_on_form:
             save_page_source(driver, "ERROR_StillOnReservationForm")
             take_screenshot(driver, "ERROR_ReservationRejected")
-            raise Exception("送信後も予約フォームの「登録」ボタンが残っています。画面上にエラーメッセージが出ている可能性があります（evidence参照）。")
+            err_text = get_form_error_text(driver)
+            raise ReservationRejected(err_text or "TMAのエラー文を取得できませんでした（evidence参照）")
 
         print("   [OK] 予約処理が完了しました。")
 
+    except (ReservationRejected, ReservationUnknown):
+        raise
     except Exception as e:
         print(f"   [エラー] 予約入力中の処理に失敗しました: {e}")
         take_screenshot(driver, "ERROR_ReservationInput")
+        if submitted:
+            # 確定ボタンを押した後の想定外エラーは、予約が入った可能性があるためリトライ対象にしない
+            raise ReservationUnknown(f"送信後にエラー: {str(e).splitlines()[0][:100] if str(e) else type(e).__name__}") from e
         raise e
 
 # ==========================================
@@ -423,7 +468,9 @@ def is_driver_alive(driver):
 
 def reserve_list(driver, password, items, callback_url, token):
     """items: [{"r": 行番号, "st": ステーション, "pl": ナンバー, "t": "YYYY-MM-DD HH:MM"}, ...]
-    1件失敗しても止めず、次の行へ進む。ブラウザが落ちた場合は再起動して再ログインする。"""
+    1件失敗しても止めず、次の行へ進む。ブラウザが落ちた場合は再起動して再ログインする。
+    一時的な失敗は最大 RESERVE_MAX_ATTEMPTS 回まで試行する。
+    TMAに拒否された場合（枠埋まり）と、送信後に判定できない場合（要確認）はリトライしない。"""
     total = len(items)
     print(f"\n--- [処理開始] リスト一括予約: {total}件 ---")
     ok_count = 0
@@ -440,21 +487,35 @@ def reserve_list(driver, password, items, callback_url, token):
         result_ok = False
         err_msg = ""
 
-        try:
-            if not is_driver_alive(driver):
-                print("   ブラウザが停止していたため再起動して再ログインします。")
-                try:
-                    driver.quit()
-                except Exception:
-                    pass
-                driver = get_chrome_driver()
-                login_(driver, password)
+        for attempt in range(1, RESERVE_MAX_ATTEMPTS + 1):
+            if attempt > 1:
+                print(f"   ---- リトライ {attempt}/{RESERVE_MAX_ATTEMPTS} ----")
+            try:
+                if not is_driver_alive(driver):
+                    print("   ブラウザが停止していたため再起動して再ログインします。")
+                    try:
+                        driver.quit()
+                    except Exception:
+                        pass
+                    driver = get_chrome_driver()
+                    login_(driver, password)
 
-            reserve_vehicle(driver, station, plate, rtime)
-            result_ok = True
-        except Exception as e:
-            err_msg = str(e).split("\n")[0][:150]
-            print(f"   [NG] 行{row} の予約に失敗しました: {err_msg}")
+                reserve_vehicle(driver, station, plate, rtime)
+                result_ok = True
+                break
+            except ReservationRejected as e:
+                err_msg = f"枠埋まり: {e}"
+                print(f"   [NG] 行{row} はTMAに拒否されました（リトライしません）: {e}")
+                break
+            except ReservationUnknown as e:
+                err_msg = f"要確認: {e}"
+                print(f"   [要確認] 行{row} は予約の成否を判定できませんでした（二重予約防止のためリトライしません）: {e}")
+                break
+            except Exception as e:
+                last = str(e).split("\n")[0][:120] or type(e).__name__
+                print(f"   [NG] 行{row} 試行{attempt}回目で失敗: {last}")
+                if attempt >= RESERVE_MAX_ATTEMPTS:
+                    err_msg = f"{RESERVE_MAX_ATTEMPTS}回試行して失敗: {last}"
         print("::endgroup::")
 
         # 折りたたみの外に、1件ごとの結果・所要時間・累計を表示する
