@@ -192,9 +192,6 @@
     </div>
 
     <div class="actions">
-      <button class="btn btn-primary" id="runBtn">
-        <span class="btn-label">全台予約を実行</span>
-      </button>
       <button class="btn btn-reserve" id="reserveAutoBtn">
         <span class="btn-label">TMAに一括予約（自動予約用シート）</span>
       </button>
@@ -242,7 +239,6 @@ const els = {
   dataDate: document.getElementById('dataDate'),
   deadline: document.getElementById('deadline'),
   customStart: document.getElementById('customStart'),
-  runBtn: document.getElementById('runBtn'),
   cancelAllBtn: document.getElementById('cancelAllBtn'),
   reserveAutoBtn: document.getElementById('reserveAutoBtn'),
   reserveModal: document.getElementById('reserveModal'),
@@ -334,34 +330,6 @@ async function loadSettings(){
     addLog('err', '設定の読み込みに失敗しました', err.message);
   }
 }
-
-els.runBtn.addEventListener('click', async () => {
-  if (!tantousha){
-    addLog('err', '担当者を選択してください');
-    return;
-  }
-  if (!els.dataDate.value || !els.deadline.value){
-    addLog('err', '全台予約日と納期日を入力してください');
-    return;
-  }
-  setBtnLoading(els.runBtn, true, '実行中…');
-  try{
-    const json = await callGas('runScheduling', {
-      settings: {
-        tantousha,
-        dataDate: els.dataDate.value,
-        deadline: els.deadline.value,
-        customStart: els.customStart.value || ""
-      }
-    });
-    const r = json.result;
-    addLog('ok', `完了：成功 ${r.successCount}件 / 失敗 ${r.failCount}件`, `担当者${r.tantousha}`);
-  } catch(err){
-    addLog('err', '全台予約の実行に失敗しました', err.message);
-  } finally {
-    setBtnLoading(els.runBtn, false);
-  }
-});
 
 els.cancelAllBtn.addEventListener('click', () => {
   els.modal.classList.add('open');
