@@ -4,6 +4,7 @@ import time
 import datetime
 import json
 import urllib.request
+import urllib.error
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -134,6 +135,27 @@ def get_form_error_text(driver):
     except Exception:
         pass
     return ""
+
+def is_reservation_completed(driver):
+    """TMAの予約完了メッセージ（「予約が完了しました」）が画面に表示されているか"""
+    try:
+        for el in driver.find_elements(By.XPATH, "//*[contains(normalize-space(.), '予約が完了しました') and not(*[contains(normalize-space(.), '予約が完了しました')])]"):
+            if el.is_displayed():
+                return True
+    except StaleElementReferenceException:
+        pass
+    return False
+
+def visible_form_buttons(driver, xpath):
+    """画面に表示されている予約フォームの「登録」ボタンだけを返す（非表示で残っているものは除外）"""
+    result = []
+    try:
+        for el in driver.find_elements(By.XPATH, xpath):
+            if el.is_displayed():
+                result.append(el)
+    except StaleElementReferenceException:
+        pass
+    return result
 
 def handle_popups(driver):
     """ボタン押下後のポップアップ処理セット（確認ダイアログ等）"""
@@ -324,11 +346,14 @@ def reserve_vehicle(driver, station, plate, reservation_time):
 
         def _after_submit(d):
             try:
+                # 予約完了メッセージが出たら即完了（裏に非表示の登録ボタンが残っていても成功）
+                if is_reservation_completed(d):
+                    return "done"
                 pop = d.find_elements(By.ID, "posupMessageConfirmOk")
                 if pop and pop[0].is_displayed():
                     return "popup"
                 submit_button.is_enabled()  # 画面が切り替わっていれば stale 例外になる
-                if not d.find_elements(By.XPATH, form_btn_xpath):
+                if not visible_form_buttons(d, form_btn_xpath):
                     return "left"
                 return False
             except StaleElementReferenceException:
@@ -350,8 +375,10 @@ def reserve_vehicle(driver, station, plate, reservation_time):
 
             def _left_form(d):
                 try:
+                    if is_reservation_completed(d):
+                        return True
                     submit_button.is_enabled()
-                    return not d.find_elements(By.XPATH, form_btn_xpath)
+                    return not visible_form_buttons(d, form_btn_xpath)
                 except StaleElementReferenceException:
                     return True
 
@@ -364,7 +391,9 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         # 送信前と同じ「登録」ボタンが残った確認画面のまま留まる。これまでは
         # 例外が起きないため無条件に成功と判定していたが、実際には登録されて
         # いないケースがあったため、送信後も同じボタンが残っているかで判定する。
-        still_on_form = driver.find_elements(By.XPATH, "//input[@type='submit' and contains(@value, '登録')] | //button[contains(text(), '登録')]")
+        # 予約完了メッセージが表示されていれば成功。表示されている登録ボタンが残っている場合のみ拒否と判定する
+        # （完了画面の裏に非表示の登録ボタンが残るケースがあり、以前はそれを拒否と誤判定していた）
+        still_on_form = [] if is_reservation_completed(driver) else visible_form_buttons(driver, form_btn_xpath)
         if still_on_form:
             save_page_source(driver, "ERROR_StillOnReservationForm")
             take_screenshot(driver, "ERROR_ReservationRejected")
@@ -437,11 +466,22 @@ def cancel_all_reservations(driver):
 # ==========================================
 # リスト一括予約処理
 # ==========================================
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """リダイレクトを追わない（GAS Web AppはPOST処理後に結果ページへ302転送するが、
+    転送先の取得で一時的に404が返ることがあるため、転送先は取りに行かない）"""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+_callback_opener = urllib.request.build_opener(_NoRedirect)
+CALLBACK_MAX_ATTEMPTS = 3
+
 def post_callback(callback_url, token, row, status, message):
     """1件ごとの結果をGAS（全台予約管理メイン）へ送り、「自動予約用」シートG列に書き込ませる。
-    送信に失敗しても予約処理自体は止めない。"""
+    GASが処理を受け付けた時点（2xx または 転送応答の3xx）で成功とする。
+    通信エラー・5xx等は数秒あけて最大 CALLBACK_MAX_ATTEMPTS 回まで送り直す。
+    送信に失敗しても予約処理自体は止めない。成功/失敗を bool で返す。"""
     if not callback_url:
-        return
+        return True
     body = json.dumps({
         "action": "reportReserveResult",
         "token": token,
@@ -449,15 +489,29 @@ def post_callback(callback_url, token, row, status, message):
         "status": status,
         "message": message,
     }).encode("utf-8")
-    req = urllib.request.Request(
-        callback_url, data=body, method="POST",
-        headers={"Content-Type": "text/plain;charset=utf-8"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as res:
-            res.read()
-    except Exception as e:
-        print(f"   [通知] GASへの結果送信に失敗しました（行{row}）: {e}")
+
+    last_err = ""
+    for attempt in range(1, CALLBACK_MAX_ATTEMPTS + 1):
+        req = urllib.request.Request(
+            callback_url, data=body, method="POST",
+            headers={"Content-Type": "text/plain;charset=utf-8"}
+        )
+        try:
+            with _callback_opener.open(req, timeout=30) as res:
+                res.read()
+            return True
+        except urllib.error.HTTPError as e:
+            if 300 <= e.code < 400:
+                # GASが処理を終えて結果ページへ転送しようとしている＝受け付け済み
+                return True
+            last_err = f"HTTP {e.code}"
+        except Exception as e:
+            last_err = str(e)
+        if attempt < CALLBACK_MAX_ATTEMPTS:
+            time.sleep(3)
+
+    print(f"   [通知] GASへの結果送信に失敗しました（行{row}、{CALLBACK_MAX_ATTEMPTS}回試行）: {last_err}")
+    return False
 
 def is_driver_alive(driver):
     try:
@@ -475,6 +529,7 @@ def reserve_list(driver, password, items, callback_url, token):
     print(f"\n--- [処理開始] リスト一括予約: {total}件 ---")
     ok_count = 0
     ng_list = []
+    unsynced_rows = []  # G列への書き込み（GAS通知）に失敗した行
 
     for i, item in enumerate(items, start=1):
         row = item.get("r")
@@ -522,16 +577,20 @@ def reserve_list(driver, password, items, callback_url, token):
         elapsed = int(time.time() - started)
         if result_ok:
             ok_count += 1
-            post_callback(callback_url, token, row, "ok", "")
+            synced = post_callback(callback_url, token, row, "ok", "")
         else:
             ng_list.append((row, plate, err_msg))
-            post_callback(callback_url, token, row, "ng", err_msg)
+            synced = post_callback(callback_url, token, row, "ng", err_msg)
+        if not synced:
+            unsynced_rows.append(row)
         status_label = "OK" if result_ok else f"NG（{err_msg}）"
         print(f"[{i}/{total}] {status_label} {elapsed}秒 / 累計 成功{ok_count}・失敗{len(ng_list)} / 残り{total - i}件")
 
     print(f"\n--- リスト一括予約 完了: 成功 {ok_count}件 / 失敗 {len(ng_list)}件（全{total}件） ---")
     for row, plate, msg in ng_list:
         print(f"   NG 行{row} {plate}: {msg}")
+    if unsynced_rows:
+        print(f"   G列未反映: 行{', 行'.join(str(r) for r in unsynced_rows)}（TMAへの予約結果は上のログが正）")
     return driver, ok_count, ng_list
 
 # ==========================================
