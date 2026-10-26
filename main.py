@@ -23,6 +23,12 @@ ROUTINE_STATION_URL = "https://dailycheck.tc-extsys.jp/tcrappsweb/web/routineSta
 CANCEL_MAX_LOOP = 130
 # 一括予約で一時的な失敗が起きた場合の最大試行回数（初回を含む）
 RESERVE_MAX_ATTEMPTS = 3
+# ★サーバー遅延対策(2026-10-26)
+LOGIN_MAX_ATTEMPTS = 2        # ログインの試行回数
+LOGIN_CONFIRM_WAIT = 30       # ログイン成功確認の待ち(秒)（旧10秒）
+STATION_LIST_WAIT = 30        # 巡回ST管理画面の一覧描画待ち(秒)
+SUBMIT_RESULT_WAIT = 60       # 確定ボタン押下後の結果判定待ち(秒)（旧30秒）
+RESERVE_RETRY_WAIT = 3        # 一括予約の再試行前の待機(秒)。試行ごとに倍
 
 TMA_ID = os.environ.get("TMA_ID", "")
 # PWは定期的にmode1/mode2で切り替わるため、実行時にpw_modeで指定する
@@ -170,25 +176,41 @@ def handle_popups(driver):
         pass 
 
 def login_(driver, password):
-    """ログイン処理"""
+    """ログイン処理
+    ★サーバー遅延対策(2026-10-26): 成功確認の待ちを10秒→30秒に延長し、
+    失敗時は10秒あけて1回だけやり直す（重い時間帯の一時的な失敗で全体が止まらないように）"""
     print("\n--- [1] ログイン ---")
-    driver.get(DEFAULT_LOGIN_URL)
-    id_parts = TMA_ID.split("-")
-    input_strict(driver, "#cardNo1", id_parts[0])
-    input_strict(driver, "#cardNo2", id_parts[1])
-    input_strict(driver, "#password", password)
-    click_strict(driver, ".btn-primary")
+    last_err = None
+    for attempt in range(1, LOGIN_MAX_ATTEMPTS + 1):
+        try:
+            driver.get(DEFAULT_LOGIN_URL)
+            id_parts = TMA_ID.split("-")
+            input_strict(driver, "#cardNo1", id_parts[0])
+            input_strict(driver, "#cardNo2", id_parts[1])
+            input_strict(driver, "#password", password)
+            click_strict(driver, ".btn-primary")
 
-    # ログイン成功判定: <main>タグの有無だけでは認証エラー画面でも素通りしてしまうため、
-    # ログイン後の共通ヘッダーにしか存在しない「ログアウト」ボタンの存在で判定する
+            # ログイン成功判定: <main>タグの有無だけでは認証エラー画面でも素通りしてしまうため、
+            # ログイン後の共通ヘッダーにしか存在しない「ログアウト」ボタンの存在で判定する
+            WebDriverWait(driver, LOGIN_CONFIRM_WAIT).until(
+                EC.presence_of_element_located((By.XPATH, "//input[@type='submit' and @value='ログアウト']"))
+            )
+            print("   ログインに成功しました。")
+            return
+        except Exception as e:
+            last_err = e
+            print(f"   [注意] ログイン失敗 {attempt}/{LOGIN_MAX_ATTEMPTS}: {str(e).splitlines()[0][:100] if str(e) else type(e).__name__}")
+            if attempt < LOGIN_MAX_ATTEMPTS:
+                time.sleep(10)
+    take_screenshot(driver, "ERROR_LoginFailed")
+    raise Exception("ログインに失敗しました（PASS/pw_modeが正しくない可能性があります）") from last_err
+
+def is_on_login_page(driver):
+    """★ログイン画面へ戻されている（セッション切れ）かどうか"""
     try:
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@type='submit' and @value='ログアウト']"))
-        )
-        print("   ログインに成功しました。")
-    except:
-        take_screenshot(driver, "ERROR_LoginFailed")
-        raise Exception("ログインに失敗しました（PASS/pw_modeが正しくない可能性があります）")
+        return "login" in driver.current_url.lower()
+    except Exception:
+        return False
 
 # ==========================================
 # 予約処理 (修正版：3ステップ遷移対応)
@@ -206,7 +228,19 @@ def reserve_vehicle(driver, station, plate, reservation_time):
     # ----------------------------------------------------
     driver.get(ROUTINE_STATION_URL)
     print("   [STEP 1] 巡回ST管理画面でステーションを検索中...")
-    
+
+    # ★サーバー遅延対策: 一覧（ステーション名）か「次へ」ボタンが描画されるまで待ってから探す
+    #   （描画前に探すと「ステーションが見つかりません」と誤判定し、試行回数を一瞬で使い切っていた）
+    try:
+        WebDriverWait(driver, STATION_LIST_WAIT).until(
+            lambda d: d.find_elements(By.XPATH, "//span[contains(@class, 'assignStationNm')] | //a[@id='assignNextPageBtn']")
+        )
+    except TimeoutException:
+        if is_on_login_page(driver):
+            raise Exception("ログイン画面へ戻されました（セッション切れ）")
+        take_screenshot(driver, "ERROR_StationListNotLoaded")
+        raise Exception(f"巡回ST管理画面の一覧が{STATION_LIST_WAIT}秒以内に表示されませんでした")
+
     station_found = False
     while True:
         # aタグの中に指定のステーション名を持つspanがあるか探す
@@ -341,7 +375,8 @@ def reserve_vehicle(driver, station, plate, reservation_time):
         submitted = True
 
         # 確定後の待機: 固定3秒＋ポップアップ待ち5秒をやめ、
-        # 「確認ポップアップが出る」か「予約フォームから画面が切り替わる」のどちらかを待つ（上限30秒）
+        # 「確認ポップアップが出る」か「予約フォームから画面が切り替わる」のどちらかを待つ
+        # （★サーバー遅延対策: 上限30秒→SUBMIT_RESULT_WAIT=60秒）
         form_btn_xpath = "//input[@type='submit' and contains(@value, '登録')] | //button[contains(text(), '登録')]"
 
         def _after_submit(d):
@@ -360,13 +395,13 @@ def reserve_vehicle(driver, station, plate, reservation_time):
                 return "left"
 
         try:
-            state = WebDriverWait(driver, 30).until(_after_submit)
+            state = WebDriverWait(driver, SUBMIT_RESULT_WAIT).until(_after_submit)
         except TimeoutException:
             state = None
 
         if state is None:
             take_screenshot(driver, "ERROR_NoResponseAfterSubmit")
-            raise ReservationUnknown("送信後30秒以内に画面が変化せず、予約の成否を判定できませんでした")
+            raise ReservationUnknown(f"送信後{SUBMIT_RESULT_WAIT}秒以内に画面が変化せず、予約の成否を判定できませんでした")
 
         if state == "popup":
             print("   確認ポップアップ検知 -> 「OK/完了」をクリック")
@@ -571,6 +606,16 @@ def reserve_list(driver, password, items, callback_url, token):
                 print(f"   [NG] 行{row} 試行{attempt}回目で失敗: {last}")
                 if attempt >= RESERVE_MAX_ATTEMPTS:
                     err_msg = f"{RESERVE_MAX_ATTEMPTS}回試行して失敗: {last}"
+                else:
+                    # ★サーバー遅延対策: 再試行の前に少し待つ（重い時間帯に即再試行して同じ失敗を繰り返さないように）
+                    time.sleep(RESERVE_RETRY_WAIT * (2 ** (attempt - 1)))
+                    # ★セッション切れ（ログイン画面へ戻された）なら再ログインしてから再試行する
+                    if is_driver_alive(driver) and is_on_login_page(driver):
+                        print("   ログイン画面へ戻されていたため再ログインします。")
+                        try:
+                            login_(driver, password)
+                        except Exception as le:
+                            print(f"   [NG] 再ログインに失敗しました: {str(le).splitlines()[0][:100]}")
         print("::endgroup::")
 
         # 折りたたみの外に、1件ごとの結果・所要時間・累計を表示する
