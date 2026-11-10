@@ -68,6 +68,10 @@ jobs:
           TMA_ID: ${{ secrets.TMA_ID }}
           TMA_PW_MODE1: ${{ secrets.TMA_PW_MODE1 }}
           TMA_PW_MODE2: ${{ secrets.TMA_PW_MODE2 }}
+          # 担当者A（戸島）用。payloadのtantousha=Aのときだけmain.pyが使う
+          TMA_ID_TJM: ${{ secrets.TMA_ID_TJM }}
+          TMA_PW_MODE1_TJM: ${{ secrets.TMA_PW_MODE1_TJM }}
+          TMA_PW_MODE2_TJM: ${{ secrets.TMA_PW_MODE2_TJM }}
           # 出力をバッファせず、ログをリアルタイムでActions画面に流す
           PYTHONUNBUFFERED: "1"
           IN_ACTION: ${{ github.event.inputs.action }}
@@ -86,6 +90,10 @@ jobs:
           TMA_ID: ${{ secrets.TMA_ID }}
           TMA_PW_MODE1: ${{ secrets.TMA_PW_MODE1 }}
           TMA_PW_MODE2: ${{ secrets.TMA_PW_MODE2 }}
+          # 担当者A（戸島）用。payloadのtantousha=Aのときだけmain.pyが使う
+          TMA_ID_TJM: ${{ secrets.TMA_ID_TJM }}
+          TMA_PW_MODE1_TJM: ${{ secrets.TMA_PW_MODE1_TJM }}
+          TMA_PW_MODE2_TJM: ${{ secrets.TMA_PW_MODE2_TJM }}
           # 出力をバッファせず、ログをリアルタイムでActions画面に流す
           PYTHONUNBUFFERED: "1"
           # client_payloadは環境変数経由で渡す（シェルの引用符に直接埋め込むと ' を含むステーション名で壊れるため）

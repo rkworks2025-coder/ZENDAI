@@ -36,6 +36,13 @@ PW_TABLE = {
     "mode1": os.environ.get("TMA_PW_MODE1", ""),
     "mode2": os.environ.get("TMA_PW_MODE2", ""),
 }
+# ★担当者A（戸島）用のログイン情報。payloadのtantoushaが"A"のときだけ使う
+#   （"B"または未指定は従来通り上の片山用を使う。手動実行workflow_dispatchの互換のため）
+TMA_ID_TJM = os.environ.get("TMA_ID_TJM", "")
+PW_TABLE_TJM = {
+    "mode1": os.environ.get("TMA_PW_MODE1_TJM", ""),
+    "mode2": os.environ.get("TMA_PW_MODE2_TJM", ""),
+}
 EVIDENCE_DIR = "evidence"
 
 # ==========================================
@@ -658,11 +665,29 @@ def main():
         print(f"Error parsing payload: {e}")
         sys.exit(1)
 
+    # ★担当者の切り替え（A=戸島 / B=片山。未指定はB）
+    global TMA_ID
+    tantousha = str(data.get('tantousha') or 'B').strip().upper()
+    if tantousha not in ('A', 'B'):
+        print(f"Error: tantoushaは 'A' か 'B' のいずれかを指定してください（受信値: {tantousha}）")
+        sys.exit(1)
+    pw_table = PW_TABLE
+    if tantousha == 'A':
+        TMA_ID = TMA_ID_TJM
+        pw_table = PW_TABLE_TJM
+    print(f"担当者 -> {'戸島(A)' if tantousha == 'A' else '片山(B)'}")
+    if not TMA_ID or "-" not in TMA_ID:
+        print(f"Error: 担当者{tantousha}のTMA_IDがSecretsに設定されていないか、「0030-担当者ID」形式になっていません")
+        sys.exit(1)
+
     pw_mode = data.get('pw_mode')
-    if pw_mode not in PW_TABLE:
+    if pw_mode not in pw_table:
         print(f"Error: pw_modeは 'mode1' か 'mode2' のいずれかを指定してください（受信値: {pw_mode}）")
         sys.exit(1)
-    password = PW_TABLE[pw_mode]
+    password = pw_table[pw_mode]
+    if not password:
+        print(f"Error: 担当者{tantousha}の{pw_mode}のPWがSecretsに設定されていません")
+        sys.exit(1)
 
     driver = get_chrome_driver()
     exit_code = 0

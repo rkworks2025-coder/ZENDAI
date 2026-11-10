@@ -172,8 +172,8 @@
 
       <h2>PWモード <span class="optional">（現在有効な方を選択）</span></h2>
       <div class="tantousha-toggle" id="pwModeToggle">
-        <button type="button" data-val="mode1">mode1（2始まり）</button>
-        <button type="button" data-val="mode2">mode2（3始まり）</button>
+        <button type="button" data-val="mode1" id="pwMode1Btn">mode1（2始まり）</button>
+        <button type="button" data-val="mode2" id="pwMode2Btn">mode2（3始まり）</button>
       </div>
 
       <h2>設定</h2>
@@ -254,9 +254,20 @@ const els = {
 let tantousha = "";
 let pwMode = "";
 
+// ★担当者ごとのPW先頭文字（PWモードボタンの表示用）
+const PW_HINT = {
+  A: { mode1: '8', mode2: '1' }, // 戸島
+  B: { mode1: '2', mode2: '3' }  // 片山
+};
+const TANTOUSHA_NAME = { A: '戸島（A）', B: '片山（B）' };
+
 function setTantousha(v){
   tantousha = v;
   [...els.toggle.children].forEach(b => b.classList.toggle('active', b.dataset.val === v));
+  // ★PWモードボタンの表示を担当者に合わせて切り替える
+  const hint = PW_HINT[v] || PW_HINT.B;
+  document.getElementById('pwMode1Btn').textContent = `mode1（${hint.mode1}始まり）`;
+  document.getElementById('pwMode2Btn').textContent = `mode2（${hint.mode2}始まり）`;
 }
 els.toggle.addEventListener('click', (e) => {
   const btn = e.target.closest('button');
@@ -332,6 +343,10 @@ async function loadSettings(){
 }
 
 els.cancelAllBtn.addEventListener('click', () => {
+  // ★取消対象の担当者を確認モーダルに表示（別担当者の予約を誤って取り消さないため）
+  const p = els.modal.querySelector('p');
+  if (p) p.textContent = `担当者：${TANTOUSHA_NAME[tantousha] || tantousha}／ pw_mode：${pwMode || '未選択'}\nTMAに入っている予約をすべて取り消します。GitHub Actions側でボタン操作の自動取消が実行され、元に戻せません。`;
+  if (p) p.style.whiteSpace = 'pre-line';
   els.modal.classList.add('open');
 });
 els.modalNo.addEventListener('click', () => {
@@ -345,8 +360,8 @@ els.modalYes.addEventListener('click', async () => {
   }
   setBtnLoading(els.cancelAllBtn, true, '起動中…');
   try{
-    await callGas('cancelAll', { pw_mode: pwMode });
-    addLog('info', '全台取消を起動しました', `pw_mode: ${pwMode} / GitHub Actions側で実行中です。完了まで数分かかります。`);
+    await callGas('cancelAll', { pw_mode: pwMode, tantousha: tantousha });
+    addLog('info', '全台取消を起動しました', `担当者: ${TANTOUSHA_NAME[tantousha] || tantousha} / pw_mode: ${pwMode} / GitHub Actions側で実行中です。完了まで数分かかります。`);
   } catch(err){
     addLog('err', '全台取消の起動に失敗しました', err.message);
   } finally {
@@ -356,9 +371,9 @@ els.modalYes.addEventListener('click', async () => {
 
 // ===== TMAリスト一括予約（自動予約用シート） =====
 els.reserveAutoBtn.addEventListener('click', async () => {
-  // 試験段階のため片山（担当者B）のみ対応
-  if (tantousha !== 'B'){
-    addLog('err', '一括予約は現在 片山（担当者B）のみ対応しています');
+  // ★担当者A（戸島）/B（片山）とも対応
+  if (tantousha !== 'A' && tantousha !== 'B'){
+    addLog('err', '担当者を選択してください');
     return;
   }
   if (!pwMode){
@@ -374,7 +389,7 @@ els.reserveAutoBtn.addEventListener('click', async () => {
       return;
     }
     els.reserveModalText.textContent =
-      `担当者：片山（B）／ pw_mode：${pwMode}\n「自動予約用」シートの ${count}件 をTMAに予約します。\n進捗は同シートのG列に表示されます。`;
+      `担当者：${TANTOUSHA_NAME[tantousha]}／ pw_mode：${pwMode}\n「自動予約用」シートの ${count}件 をTMAに予約します。\n進捗は同シートのG列に表示されます。`;
     els.reserveModal.classList.add('open');
   } catch(err){
     addLog('err', '予約リストの確認に失敗しました', err.message);
@@ -389,8 +404,8 @@ els.reserveModalYes.addEventListener('click', async () => {
   els.reserveModal.classList.remove('open');
   setBtnLoading(els.reserveAutoBtn, true, '起動中…');
   try{
-    const json = await callGas('reserveAuto', { pw_mode: pwMode });
-    addLog('info', `一括予約を起動しました（${json.count}件）`, `pw_mode: ${pwMode} / 進捗は「自動予約用」シートG列で確認できます。`);
+    const json = await callGas('reserveAuto', { pw_mode: pwMode, tantousha: tantousha });
+    addLog('info', `一括予約を起動しました（${json.count}件）`, `担当者: ${TANTOUSHA_NAME[tantousha]} / pw_mode: ${pwMode} / 進捗は「自動予約用」シートG列で確認できます。`);
   } catch(err){
     addLog('err', '一括予約の起動に失敗しました', err.message);
   } finally {
